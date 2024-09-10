@@ -2,6 +2,7 @@
 Enhancing Clinical Decision-Making: Predictive Models for Mortality and Survival in Critical Care
 
 **Database link**: <https://physionet.org/content/mimiciii/1.4/>
+
 **Abbreviation link**: <https://mimic.mit.edu/docs/iii/tables>
 
 ## 1. Data Understanding and Preprocessing
