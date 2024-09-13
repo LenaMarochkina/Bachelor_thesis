@@ -20,6 +20,40 @@ data_clean <-  data_clean %>%
          EDREGTIME = ymd_hms(EDREGTIME),
          EDOUTTIME = ymd_hms(EDREGTIME))
 
+# Check if all times have valid hours (0-23), minutes (0-59), and seconds (0-59)
+time_validation <- data_clean %>%
+  mutate(valid_time = 
+           is.na(ADMITTIME) | hour(ADMITTIME) %in% 0:23 & minute(ADMITTIME) %in% 0:59 & second(ADMITTIME) %in% 0:59 &
+           is.na(DISCHTIME) | hour(DISCHTIME) %in% 0:23 & minute(DISCHTIME) %in% 0:59 & second(DISCHTIME) %in% 0:59 &
+           is.na(DEATHTIME) | hour(DEATHTIME) %in% 0:23 & minute(DEATHTIME) %in% 0:59 & second(DEATHTIME) %in% 0:59 &
+           is.na(EDREGTIME) | hour(EDREGTIME) %in% 0:23 & minute(EDREGTIME) %in% 0:59 & second(EDREGTIME) %in% 0:59 &
+           is.na(EDOUTTIME) | hour(EDOUTTIME) %in% 0:23 & minute(EDOUTTIME) %in% 0:59 & second(EDOUTTIME) %in% 0:59)
+
+# Filter rows with invalid times (if any)
+data_clean <- time_validation %>%
+  filter(valid_time == TRUE) %>%
+  mutate(valid_time = NULL)
+
+# Check Admission ID
+data_clean <- data_clean %>%
+  filter(HADM_ID %in% 100000:199999)
+
+# Check ADMISSION_TYPE
+data_clean <- data_clean %>%
+  filter(ADMISSION_TYPE %in% c("ELECTIVE", "URGENT", "NEWBORN", "EMERGENCY"))
+
+# Check ADMISSION_LOCATION
+data_clean <- data_clean %>%
+  filter(ADMISSION_LOCATION %in% c("EMERGENCY ROOM ADMIT",
+                                   "TRANSFER FROM HOSP/EXTRAM",
+                                   "TRANSFER FROM OTHER HEALT",
+                                   "CLINIC REFERRAL/PREMATURE",
+                                   "** INFO NOT AVAILABLE **",
+                                   "TRANSFER FROM SKILLED NUR",
+                                   "TRSF WITHIN THIS FACILITY",
+                                   "HMO REFERRAL/SICK",
+                                   "PHYS REFERRAL/NORMAL DELI"))
+
 # Check for multiple DEATHTIME entries per SUBJECT_ID
 subject_death_check <- data_clean %>%
   select(SUBJECT_ID, DEATHTIME, DIAGNOSIS) %>%
@@ -61,13 +95,6 @@ data_clean <- data_with_timetodeath %>%
   arrange(SUBJECT_ID, DEATHTIME) %>%
   filter(is.na(acceptable_negative_timetodeath)) %>%
   mutate(acceptable_negative_timetodeath = NULL)
-
-data_clean %>% View()
-
-# Check for missing values
-missing_values <- data_clean %>%
-  summarise_all(~ sum(is.na(.)))
-print(missing_values)
 
 # Write cleaned data to xslx
 write_xlsx(data_clean, "data/raw/ADMISSIONS_clean.xlsx")
