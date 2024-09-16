@@ -1,23 +1,23 @@
-# Read data from csv
-data <- read.csv("data/raw/ADMISSIONS.csv", stringsAsFactors = TRUE)
-data %>% View()
+# Read admissions from csv
+admissions <- read.csv("data/raw/ADMISSIONS.csv", stringsAsFactors = TRUE)
+admissions %>% View()
 
 # Normalize the columns by converting everything to uppercase
-data <- data %>%
+admissions <- admissions %>%
   mutate(across(where(is.factor), function(x) toupper(x) %>% as.factor()))
 
 # Replace empty spaces with NA
-data_NA <- data %>%
+admissions_NA <- admissions %>%
   mutate(across(where(is.factor), function(x) as.character(x))) %>%
   mutate(across(where(is.character), ~ na_if(., ""))) %>%
   mutate(across(where(is.character), function(x) as.factor(x)))
 
 # Remove exact duplicate rows
-data_clean <- data_NA %>%
+admissions_clean <- admissions_NA %>%
   distinct()
 
 # Impute missing categorical variables
-data_clean <- data_clean %>%
+admissions_clean <- admissions_clean %>%
   mutate(LANGUAGE = as.factor(replace_na(as.character(LANGUAGE), "UNKNOWN")),
          RELIGION = as.factor(replace_na(as.character(RELIGION), "UNKNOWN")),
          INSURANCE = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")),
@@ -25,7 +25,7 @@ data_clean <- data_clean %>%
          ETHNICITY = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")))
 
 # Change datetime format
-data_clean <-  data_clean %>%
+admissions_clean <-  admissions_clean %>%
   mutate(ADMITTIME = ymd_hms(ADMITTIME),
          DISCHTIME = ymd_hms(DISCHTIME),
          DEATHTIME = ymd_hms(DEATHTIME),
@@ -33,7 +33,7 @@ data_clean <-  data_clean %>%
          EDOUTTIME = ymd_hms(EDREGTIME))
 
 # Check if all times have valid hours (0-23), minutes (0-59), and seconds (0-59)
-time_validation <- data_clean %>%
+time_validation <- admissions_clean %>%
   mutate(valid_time = 
            is.na(ADMITTIME) | hour(ADMITTIME) %in% 0:23 & minute(ADMITTIME) %in% 0:59 & second(ADMITTIME) %in% 0:59 &
            is.na(DISCHTIME) | hour(DISCHTIME) %in% 0:23 & minute(DISCHTIME) %in% 0:59 & second(DISCHTIME) %in% 0:59 &
@@ -42,20 +42,20 @@ time_validation <- data_clean %>%
            is.na(EDOUTTIME) | hour(EDOUTTIME) %in% 0:23 & minute(EDOUTTIME) %in% 0:59 & second(EDOUTTIME) %in% 0:59)
 
 # Filter rows with invalid times (if any)
-data_clean <- time_validation %>%
+admissions_clean <- time_validation %>%
   filter(valid_time == TRUE) %>%
   mutate(valid_time = NULL)
 
 # Check Admission ID
-data_clean <- data_clean %>%
+admissions_clean <- admissions_clean %>%
   filter(HADM_ID %in% 100000:199999)
 
 # Check ADMISSION_TYPE
-data_clean <- data_clean %>%
+admissions_clean <- admissions_clean %>%
   filter(ADMISSION_TYPE %in% c("ELECTIVE", "URGENT", "NEWBORN", "EMERGENCY"))
 
 # Check ADMISSION_LOCATION
-data_clean <- data_clean %>%
+admissions_clean <- admissions_clean %>%
   filter(ADMISSION_LOCATION %in% c("EMERGENCY ROOM ADMIT",
                                    "TRANSFER FROM HOSP/EXTRAM",
                                    "TRANSFER FROM OTHER HEALT",
@@ -67,23 +67,23 @@ data_clean <- data_clean %>%
                                    "PHYS REFERRAL/NORMAL DELI"))
 
 # Check DISCHARGE_LOCATION
-unique_discharge_location <- data_clean %>%
+unique_discharge_location <- admissions_clean %>%
   distinct(DISCHARGE_LOCATION)
 
 # Check unique values
-unique_language <- data_clean %>%
+unique_language <- admissions_clean %>%
   distinct(LANGUAGE)
 
-unique_insurance <- data_clean %>%
+unique_insurance <- admissions_clean %>%
   distinct(INSURANCE)
 
-unique_religion <- data_clean %>%
+unique_religion <- admissions_clean %>%
   distinct(RELIGION)
 
-unique_marital_status <- data_clean %>%
+unique_marital_status <- admissions_clean %>%
   distinct(MARITAL_STATUS)
 
-unique_ethnicity <- data_clean %>%
+unique_ethnicity <- admissions_clean %>%
   distinct(ETHNICITY)
 
 unique_ethnicity %>% View()
@@ -93,7 +93,7 @@ unique_marital_status %>% View()
 unique_religion %>% View()
 
 # Create a new column for Ethnicity categories (White, Black, Asian)
-data_clean <- data_clean %>%
+admissions_clean <- admissions_clean %>%
   mutate(
     ETHNICITY_GROUP = case_when(
       str_detect(ETHNICITY, "WHITE|MIDDLE EASTERN|AMERICAN INDIAN/ALASKA NATIVE|PORTUGUESE|CARIBBEAN ISLAND|HISPANIC|LATINO") ~ "WHITE",
@@ -107,7 +107,7 @@ data_clean <- data_clean %>%
   relocate(ETHNICITY_GROUP, .after = ETHNICITY) 
 
 # Create a new column for Religion categories (CHRISTIANITY, JUDAISM, ISLAM, HINDUISM, BUDDHISM, OTHER, UNKNOWN)
-data_clean <- data_clean %>%
+admissions_clean <- admissions_clean %>%
   mutate(
     RELIGION_GROUP = case_when(
       str_detect(RELIGION, "CATHOLIC|PROTESTANT|BAPTIST|METHODIST|7TH DAY ADVENTIST|UNITARIAN-UNIVERSALIST|EPISCOPALIAN|JEHOVAH|LUTHERAN|CHRISTIAN SCIENTIST|GREEK ORTHODOX|ROMANIAN EAST. ORTH") ~ "CHRISTIANITY",
@@ -124,7 +124,7 @@ data_clean <- data_clean %>%
   relocate(RELIGION_GROUP, .after = RELIGION) 
 
 # Create a new column to check if all conditions are met for expired patients
-check_expired <- data_clean %>%
+check_expired <- admissions_clean %>%
   mutate(
     validity_check = case_when(
       # Check for flag = true with DEATHTIME as NA or DISCHARGE_LOCATION not equal to "DEAD/EXPIRED"
@@ -141,7 +141,7 @@ check_expired <- data_clean %>%
   select(SUBJECT_ID, validity_check)
 
 # Check for multiple DEATHTIME entries per SUBJECT_ID
-subject_death_check <- data_clean %>%
+subject_death_check <- admissions_clean %>%
   select(SUBJECT_ID, DEATHTIME, DIAGNOSIS) %>%
   filter(!is.na(DEATHTIME)) %>%   # Exclude rows where DEATHTIME is NA
   group_by(SUBJECT_ID) %>%
@@ -163,7 +163,7 @@ if (all(subject_is_donor$has_organ_donor_diagnosis)) {
 }
 
 # Create the TIMETODEATH variable in secs
-data_with_timetodeath <- data_clean %>%
+admissions_with_timetodeath <- admissions_clean %>%
   group_by(SUBJECT_ID) %>%
   filter(!is.na(DEATHTIME)) %>%
   arrange(DEATHTIME) %>%
@@ -171,9 +171,9 @@ data_with_timetodeath <- data_clean %>%
   mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs"))) %>%
   mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))  # Create flag only for negative TIMETODEATH and when EDREGTIME == EDOUTTIME
 
-data_clean <- data_with_timetodeath %>%
+admissions_clean <- admissions_with_timetodeath %>%
   arrange(SUBJECT_ID, DEATHTIME) %>%
-  bind_rows(data_clean) %>%
+  bind_rows(admissions_clean) %>%
   arrange(SUBJECT_ID, DEATHTIME) %>%
   mutate(TIMETODEATH = replace(TIMETODEATH, TIMETODEATH == "", 0)) %>%
   relocate(TIMETODEATH, .after = DEATHTIME) %>%
@@ -181,5 +181,5 @@ data_clean <- data_with_timetodeath %>%
   mutate(acceptable_negative_timetodeath = NULL) %>%
   ungroup()
 
-# Write cleaned data to xslx
-write_xlsx(data_clean, "data/raw/ADMISSIONS_clean.xlsx")
+# Write cleaned admissions to xslx
+write_xlsx(admissions_clean, "data/raw/ADMISSIONS_clean.xlsx")
