@@ -2,6 +2,10 @@
 data <- read.csv("data/raw/ADMISSIONS.csv", stringsAsFactors = TRUE)
 data %>% View()
 
+# Normalize the columns by converting everything to uppercase
+data <- data %>%
+  mutate(across(where(is.factor), function(x) toupper(x) %>% as.factor()))
+
 # Replace empty spaces with NA
 data_NA <- data %>%
   mutate(across(where(is.factor), function(x) as.character(x))) %>%
@@ -11,6 +15,14 @@ data_NA <- data %>%
 # Remove exact duplicate rows
 data_clean <- data_NA %>%
   distinct()
+
+# Impute missing categorical variables
+data_clean <- data_clean %>%
+  mutate(LANGUAGE = as.factor(replace_na(as.character(LANGUAGE), "UNKNOWN")),
+         RELIGION = as.factor(replace_na(as.character(RELIGION), "UNKNOWN")),
+         INSURANCE = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")),
+         MARITAL_STATUS = as.factor(replace_na(as.character(MARITAL_STATUS), "UNKNOWN")),
+         ETHNICITY = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")))
 
 # Change datetime format
 data_clean <-  data_clean %>%
@@ -54,6 +66,60 @@ data_clean <- data_clean %>%
                                    "HMO REFERRAL/SICK",
                                    "PHYS REFERRAL/NORMAL DELI"))
 
+# Check unique values
+unique_language <- data_clean %>%
+  distinct(LANGUAGE)
+
+unique_insurance <- data_clean %>%
+  distinct(INSURANCE)
+
+unique_religion <- data_clean %>%
+  distinct(RELIGION)
+
+unique_marital_status <- data_clean %>%
+  distinct(MARITAL_STATUS)
+
+unique_ethnicity <- data_clean %>%
+  distinct(ETHNICITY)
+
+unique_ethnicity %>% View()
+unique_language %>% View()
+unique_insurance %>% View()
+unique_marital_status %>% View()
+unique_religion %>% View()
+
+# Create a new column for Ethnicity categories (White, Black, Asian)
+data_clean <- data_clean %>%
+  mutate(
+    ETHNICITY_GROUP = case_when(
+      str_detect(ETHNICITY, "WHITE|MIDDLE EASTERN|AMERICAN INDIAN/ALASKA NATIVE|PORTUGUESE|CARIBBEAN ISLAND|HISPANIC|LATINO") ~ "WHITE",
+      str_detect(ETHNICITY, "BLACK|AFRICAN|CAPE VERDEAN|HAITIAN") ~ "BLACK",
+      str_detect(ETHNICITY, "ASIAN") ~ "ASIAN",
+      ETHNICITY %in% c("UNKNOWN/NOT SPECIFIED", "UNABLE TO OBTAIN", "PATIENT DECLINED TO ANSWER", NA) ~ "UNKNOWN",
+      TRUE ~ "OTHER" # For all other ethnicities
+    ),
+    ETHNICITY_GROUP = as.factor(ETHNICITY_GROUP)
+  ) %>%
+  relocate(ETHNICITY_GROUP, .after = ETHNICITY) 
+
+# Create a new column for Religion categories (Christianity, Judaism, Islam, Hinduism, Buddhism, Other, Unknown)
+# Create a new column for Religion categories (CHRISTIANITY, JUDAISM, ISLAM, HINDUISM, BUDDHISM, OTHER, UNKNOWN)
+data_clean <- data_clean %>%
+  mutate(
+    RELIGION_GROUP = case_when(
+      str_detect(RELIGION, "CATHOLIC|PROTESTANT|BAPTIST|METHODIST|7TH DAY ADVENTIST|UNITARIAN-UNIVERSALIST|EPISCOPALIAN|JEHOVAH|LUTHERAN|CHRISTIAN SCIENTIST|GREEK ORTHODOX|ROMANIAN EAST. ORTH") ~ "CHRISTIANITY",
+      str_detect(RELIGION, "JEWISH|HEBREW") ~ "JUDAISM",
+      str_detect(RELIGION, "MUSLIM") ~ "ISLAM",
+      str_detect(RELIGION, "HINDU") ~ "HINDUISM",
+      str_detect(RELIGION, "BUDDHIST") ~ "BUDDHISM",
+      RELIGION %in% c("OTHER") ~ "OTHER",
+      RELIGION %in% c("UNKNOWN", "UNOBTAINABLE", "NOT SPECIFIED", NA) ~ "UNKNOWN",
+      TRUE ~ "OTHER"
+    ),
+    RELIGION_GROUP = as.factor(toupper(RELIGION_GROUP)) # Convert RELIGION_GROUP to a factor and ensure uppercase
+  ) %>%
+  relocate(RELIGION_GROUP, .after = RELIGION) 
+
 # Check for multiple DEATHTIME entries per SUBJECT_ID
 subject_death_check <- data_clean %>%
   select(SUBJECT_ID, DEATHTIME, DIAGNOSIS) %>%
@@ -76,23 +142,21 @@ if (all(subject_is_donor$has_organ_donor_diagnosis)) {
   print("Not all patients with 2 death times were donors.")
 }
 
-# Create the TIMETODEATH variable
+# Create the TIMETODEATH variable in secs
 data_with_timetodeath <- data_clean %>%
   group_by(SUBJECT_ID) %>%
   filter(!is.na(DEATHTIME)) %>%
   arrange(DEATHTIME) %>%
   slice(1) %>%  
-  mutate(TIMETODEATH = difftime(DEATHTIME, ADMITTIME, units = "secs")) %>%
-  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA)) %>%  # Create flag only for negative TIMETODEATH and when EDREGTIME == EDOUTTIME
-  mutate(TIMETODEATH = sprintf("%02d:%02d:%02d", 
-                               as.integer(TIMETODEATH) %/% 3600,           # Hours
-                               (as.integer(TIMETODEATH) %% 3600) %/% 60,   # Minutes
-                               as.integer(TIMETODEATH) %% 60))             # Seconds
+  mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs"))) %>%
+  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))  # Create flag only for negative TIMETODEATH and when EDREGTIME == EDOUTTIME
 
 data_clean <- data_with_timetodeath %>%
   arrange(SUBJECT_ID, DEATHTIME) %>%
   bind_rows(data_clean) %>%
   arrange(SUBJECT_ID, DEATHTIME) %>%
+  mutate(TIMETODEATH = replace(TIMETODEATH, TIMETODEATH == "", 0)) %>%
+  relocate(TIMETODEATH, .after = DEATHTIME) %>%
   filter(is.na(acceptable_negative_timetodeath)) %>%
   mutate(acceptable_negative_timetodeath = NULL)
 
