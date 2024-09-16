@@ -1,24 +1,25 @@
-# Read data from csv
-data <- read.csv("data/raw/CALLOUT.csv", stringsAsFactors = TRUE)
-data %>% View()
+# Read callout from csv
+callout <- read.csv("data/raw/CALLOUT.csv", stringsAsFactors = TRUE)
+
+callout %>% View()
 
 # Normalize the columns by converting everything to uppercase
-data <- data %>%
+callout <- callout %>%
   mutate(across(where(is.factor), function(x) toupper(x) %>% as.factor()))
 
 # Replace empty spaces with NA
-data_NA <- data %>%
+callout_NA <- callout %>%
   mutate(across(where(is.factor), function(x) as.character(x))) %>%
   mutate(across(where(is.character), ~ na_if(., ""))) %>%
   mutate(across(where(is.character), function(x) as.factor(x)))
 
 # Remove exact duplicate rows
-data_clean <- data_NA %>%
+callout_clean <- callout_NA %>%
   distinct()
 
 # Change datetime format
 # Convert time columns to proper datetime format using lubridate's ymd_hms
-data_clean <- data_clean %>%
+callout_clean <- callout_clean %>%
   mutate(CREATETIME = ymd_hms(CREATETIME),
          UPDATETIME = ymd_hms(UPDATETIME),
          ACKNOWLEDGETIME = ymd_hms(ACKNOWLEDGETIME),
@@ -27,7 +28,7 @@ data_clean <- data_clean %>%
          CURRENTRESERVATIONTIME = ymd_hms(CURRENTRESERVATIONTIME))
 
 # Check if all times have valid hours (0-23), minutes (0-59), and seconds (0-59)
-time_validation <- data_clean %>%
+time_validation <- callout_clean %>%
   mutate(valid_time = 
            (is.na(CREATETIME) | (hour(CREATETIME) %in% 0:23 & minute(CREATETIME) %in% 0:59 & second(CREATETIME) %in% 0:59)) &
            (is.na(UPDATETIME) | (hour(UPDATETIME) %in% 0:23 & minute(UPDATETIME) %in% 0:59 & second(UPDATETIME) %in% 0:59)) &
@@ -42,7 +43,7 @@ invalid_time_rows <- time_validation %>%
   filter(valid_time == FALSE)
 
 # Check for invalid values in binary columns (REQUEST_TELE, REQUEST_RESP, REQUEST_CDIFF, REQUEST_MRSA, REQUEST_VRE)
-invalid_values <- data_clean %>%
+invalid_values <- callout_clean %>%
   filter(
     !REQUEST_TELE %in% c(0, 1) |
       !REQUEST_RESP %in% c(0, 1) |
@@ -61,11 +62,11 @@ if (nrow(invalid_values) > 0) {
 
 # Check CALLOUT_OUTCOME vs OUTCOMETIME consistency
 # Identify rows where CALLOUT_OUTCOME is 'Discharged' but OUTCOMETIME is NA
-inconsistent_discharge <- data_clean %>%
+inconsistent_discharge <- callout_clean %>%
   filter(CALLOUT_OUTCOME == 'Discharged' & is.na(OUTCOMETIME))
 
 # Identify rows where CALLOUT_OUTCOME is 'Cancelled' but OUTCOMETIME is not NA
-inconsistent_cancel <- data_clean %>%
+inconsistent_cancel <- callout_clean %>%
   filter(CALLOUT_OUTCOME == 'Cancelled' & !is.na(OUTCOMETIME))
 
 # Combine both sets of inconsistent rows
@@ -79,4 +80,22 @@ if (nrow(inconsistent_rows) > 0) {
   print("All rows have consistent CALLOUT_OUTCOME and OUTCOMETIME values.")
 }
 
+# Identify rows where ACKNOWLEDGE_STATUS is 'Acknowledged' but ACKNOWLEDGETIME is NA
+inconsistent_acknowledge <- callout_clean %>%
+  filter(ACKNOWLEDGE_STATUS == 'Acknowledged' & is.na(ACKNOWLEDGETIME))
 
+# Check if any inconsistent rows exist
+if (nrow(inconsistent_acknowledge) > 0) {
+  print("Inconsistent rows where ACKNOWLEDGE_STATUS is 'Acknowledged' but ACKNOWLEDGETIME is NA:")
+  print(inconsistent_acknowledge)
+} else {
+  print("All rows have consistent ACKNOWLEDGE_STATUS and ACKNOWLEDGETIME values.")
+}
+
+# Example join with PATIENTS and ADMISSIONS
+callout_clean <- callout_clean %>%
+  left_join(patients_callout, by = "SUBJECT_ID") %>%
+  left_join(admissions_callout, by = "HADM_ID")
+
+# Write cleaned admissions to xslx
+write_xlsx(callout_clean, "data/raw/CALLOUT_clean.xlsx")
