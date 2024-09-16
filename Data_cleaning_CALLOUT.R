@@ -92,10 +92,5 @@ if (nrow(inconsistent_acknowledge) > 0) {
   print("All rows have consistent ACKNOWLEDGE_STATUS and ACKNOWLEDGETIME values.")
 }
 
-# Example join with PATIENTS and ADMISSIONS
-callout_clean <- callout_clean %>%
-  left_join(patients_callout, by = "SUBJECT_ID") %>%
-  left_join(admissions_callout, by = "HADM_ID")
-
 # Write cleaned admissions to xslx
 write_xlsx(callout_clean, "data/raw/CALLOUT_clean.xlsx")
