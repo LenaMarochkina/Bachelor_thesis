@@ -66,6 +66,10 @@ data_clean <- data_clean %>%
                                    "HMO REFERRAL/SICK",
                                    "PHYS REFERRAL/NORMAL DELI"))
 
+# Check DISCHARGE_LOCATION
+unique_discharge_location <- data_clean %>%
+  distinct(DISCHARGE_LOCATION)
+
 # Check unique values
 unique_language <- data_clean %>%
   distinct(LANGUAGE)
@@ -102,7 +106,6 @@ data_clean <- data_clean %>%
   ) %>%
   relocate(ETHNICITY_GROUP, .after = ETHNICITY) 
 
-# Create a new column for Religion categories (Christianity, Judaism, Islam, Hinduism, Buddhism, Other, Unknown)
 # Create a new column for Religion categories (CHRISTIANITY, JUDAISM, ISLAM, HINDUISM, BUDDHISM, OTHER, UNKNOWN)
 data_clean <- data_clean %>%
   mutate(
@@ -119,6 +122,23 @@ data_clean <- data_clean %>%
     RELIGION_GROUP = as.factor(toupper(RELIGION_GROUP)) # Convert RELIGION_GROUP to a factor and ensure uppercase
   ) %>%
   relocate(RELIGION_GROUP, .after = RELIGION) 
+
+# Create a new column to check if all conditions are met for expired patients
+check_expired <- data_clean %>%
+  mutate(
+    validity_check = case_when(
+      # Check for flag = true with DEATHTIME as NA or DISCHARGE_LOCATION not equal to "DEAD/EXPIRED"
+      HOSPITAL_EXPIRE_FLAG == 1 & (is.na(DEATHTIME) | DISCHARGE_LOCATION != "DEAD/EXPIRED") ~ "Invalid",
+      
+      # Check for flag = false with DEATHTIME not NA or DISCHARGE_LOCATION equal to "DEAD/EXPIRED"
+      HOSPITAL_EXPIRE_FLAG == 0 & (!is.na(DEATHTIME) | DISCHARGE_LOCATION == "DEAD/EXPIRED") ~ "Invalid",
+      
+      # If no issues, mark as valid
+      TRUE ~ "Valid"
+    )
+  ) %>%
+  filter(validity_check == FALSE) %>%
+  select(SUBJECT_ID, validity_check)
 
 # Check for multiple DEATHTIME entries per SUBJECT_ID
 subject_death_check <- data_clean %>%
@@ -158,7 +178,8 @@ data_clean <- data_with_timetodeath %>%
   mutate(TIMETODEATH = replace(TIMETODEATH, TIMETODEATH == "", 0)) %>%
   relocate(TIMETODEATH, .after = DEATHTIME) %>%
   filter(is.na(acceptable_negative_timetodeath)) %>%
-  mutate(acceptable_negative_timetodeath = NULL)
+  mutate(acceptable_negative_timetodeath = NULL) %>%
+  ungroup()
 
 # Write cleaned data to xslx
 write_xlsx(data_clean, "data/raw/ADMISSIONS_clean.xlsx")
