@@ -182,4 +182,4 @@ admissions_clean <- admissions_with_timetodeath %>%
   ungroup()
 
 # Write cleaned admissions to xslx
-write_xlsx(admissions_clean, "data/raw/ADMISSIONS_clean.xlsx")
+write.csv(admissions_clean, "data/raw/ADMISSIONS_clean.csv")

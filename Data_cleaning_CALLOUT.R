@@ -93,4 +93,4 @@ if (nrow(inconsistent_acknowledge) > 0) {
 }
 
 # Write cleaned admissions to xslx
-write_xlsx(callout_clean, "data/raw/CALLOUT_clean.xlsx")
+write.csv(callout_clean, "data/raw/CALLOUT_clean.csv")
