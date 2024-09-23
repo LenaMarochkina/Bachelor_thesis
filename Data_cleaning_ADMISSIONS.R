@@ -181,5 +181,5 @@ admissions_clean <- admissions_with_timetodeath %>%
   mutate(acceptable_negative_timetodeath = NULL) %>%
   ungroup()
 
-# Write cleaned admissions to xslx
+# Write cleaned admissions to csv
 write.csv(admissions_clean, "data/raw/ADMISSIONS_clean.csv")

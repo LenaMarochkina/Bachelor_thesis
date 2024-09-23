@@ -1,0 +1,52 @@
+# Read items from csv
+items <- read.csv("data/raw/D_ITEMS.csv", stringsAsFactors = TRUE)
+items %>% View()
+
+# Normalize the columns by converting everything to uppercase
+items <- items %>%
+  mutate(across(where(is.factor), function(x) toupper(x) %>% as.factor()))
+
+# Replace empty spaces with NA
+items_NA <- items %>%
+  mutate(across(where(is.factor), function(x) as.character(x))) %>%
+  mutate(across(where(is.character), ~ na_if(., ""))) %>%
+  mutate(across(where(is.character), function(x) as.factor(x)))
+
+# Remove exact duplicate rows
+items_clean <- items_NA %>%
+  distinct()
+
+items <- items_clean %>%
+  select(LABEL) %>%
+  arrange(desc(LABEL))
+
+# Choose procedures process
+# Choose all patients ID who died from ADMISSION_clean.csv
+died_patients <- read.csv("data/raw/ADMISSIONS_CLEAN.csv", stringsAsFactors = TRUE)
+died_patients <- died_patients %>%
+  filter(TIMETODEATH != 0) %>%  
+  select(SUBJECT_ID) %>%                
+  distinct()   
+
+# Choose procedures for died patients from CHARTEVENTS
+
+# Assuming died_patients is already defined and has a column "ID"
+f <- function(df, pos) {
+  # Filter the chunk to include only rows where the ID is present in died_patients
+  filtered_df <- df %>%
+    filter(SUBJECT_ID %in% died_patients$SUBJECT_ID)
+  
+  # Print the position of the current chunk and the number of rows after filtering
+  print(paste("Processing chunk at position:", pos, "with", nrow(filtered_df), "rows after filtering"))
+  
+  # Return the filtered chunk
+  return(filtered_df)
+}
+
+# Reading the CSV in chunks and applying the callback function
+events_died_patients <- read_csv_chunked("data/raw/CHARTEVENTS.csv", 
+                                         callback = DataFrameCallback$new(f),
+                                         chunk_size = 1000000)
+
+# Write cleaned items to csv
+write.csv(items, "data/raw/items.csv")

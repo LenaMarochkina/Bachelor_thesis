@@ -28,5 +28,5 @@ if(nrow(cgid_duplicates) > 0){
   print("All CGID values are unique.")
 }
 
-# Write cleaned admissions to xslx
-write.csv(caregivers_clean, "data/raw/ADMISSIONS_clean.csv")
+# Write cleaned caregivers to csv
+write.csv(caregivers_clean, "data/raw/CAREGIVERS_clean.csv")

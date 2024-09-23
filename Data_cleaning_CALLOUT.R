@@ -92,5 +92,5 @@ if (nrow(inconsistent_acknowledge) > 0) {
   print("All rows have consistent ACKNOWLEDGE_STATUS and ACKNOWLEDGETIME values.")
 }
 
-# Write cleaned admissions to xslx
+# Write cleaned admissions to csv
 write.csv(callout_clean, "data/raw/CALLOUT_clean.csv")
