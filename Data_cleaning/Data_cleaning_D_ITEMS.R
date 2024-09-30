@@ -28,25 +28,5 @@ died_patients <- died_patients %>%
   select(SUBJECT_ID) %>%                
   distinct()   
 
-# Choose procedures for died patients from CHARTEVENTS
-
-# Assuming died_patients is already defined and has a column "ID"
-f <- function(df, pos) {
-  # Filter the chunk to include only rows where the ID is present in died_patients
-  filtered_df <- df %>%
-    filter(SUBJECT_ID %in% died_patients$SUBJECT_ID)
-  
-  # Print the position of the current chunk and the number of rows after filtering
-  print(paste("Processing chunk at position:", pos, "with", nrow(filtered_df), "rows after filtering"))
-  
-  # Return the filtered chunk
-  return(filtered_df)
-}
-
-# Reading the CSV in chunks and applying the callback function
-events_died_patients <- read_csv_chunked("data/raw/CHARTEVENTS.csv", 
-                                         callback = DataFrameCallback$new(f),
-                                         chunk_size = 1000000)
-
 # Write cleaned items to csv
 write.csv(items, "data/raw/items.csv")

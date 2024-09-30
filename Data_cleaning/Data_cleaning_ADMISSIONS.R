@@ -142,18 +142,29 @@ if (all(subject_is_donor$has_organ_donor_diagnosis)) {
   print("Not all patients with 2 death times were donors.")
 }
 
-# Create the TIMETODEATH variable in seconds
+# Create the TIMETODEATH variable in seconds for each unique SUBJECT_ID and HADM_ID
 admissions_with_timetodeath <- admissions_clean %>%
   filter(!is.na(DEATHTIME)) %>%
-  arrange(SUBJECT_ID, DEATHTIME) %>%
-  mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs"))) %>%
-  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))  # Create flag only for negative TIMETODEATH
+  arrange(SUBJECT_ID, HADM_ID, DEATHTIME) %>%
+  mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs")))
 
-# Keep rows with valid TIMETODEATH and no negative time mismatches
+# Ensure that each SUBJECT_ID and HADM_ID is unique in admissions_with_timetodeath
+admissions_with_timetodeath <- admissions_with_timetodeath %>%
+  distinct(SUBJECT_ID, HADM_ID, .keep_all = TRUE)
+
+# Perform left join using both SUBJECT_ID and HADM_ID as keys
 admissions_clean <- admissions_clean %>%
-  left_join(admissions_with_timetodeath %>% select(SUBJECT_ID, TIMETODEATH), by = "SUBJECT_ID") %>%
+  left_join(admissions_with_timetodeath %>% select(SUBJECT_ID, HADM_ID, TIMETODEATH), 
+            by = c("SUBJECT_ID", "HADM_ID"))
+
+# After the join, create acceptable_negative_timetodeath flag for negative TIMETODEATH
+admissions_clean <- admissions_clean %>%
+  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))
+
+# Filter out rows with unacceptable negative TIMETODEATH values
+admissions_clean <- admissions_clean %>%
   filter(is.na(acceptable_negative_timetodeath)) %>%
-  mutate(acceptable_negative_timetodeath = NULL)
+  select(-acceptable_negative_timetodeath)  # Remove the flag column after filtering
 
 # Ensure no duplicates after merging
 admissions_clean <- admissions_clean %>%
@@ -161,7 +172,7 @@ admissions_clean <- admissions_clean %>%
 
 # Choose necessary columns after checking all data
 admissions_clean <- admissions_clean %>%
-  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY)
+  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, TIMETODEATH, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY)
 
 # Write cleaned admissions to csv
 write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv")
