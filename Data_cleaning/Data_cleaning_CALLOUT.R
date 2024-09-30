@@ -62,6 +62,7 @@ if (nrow(inconsistent_rows) > 0) {
 } else {
   print("All rows have consistent CALLOUT_OUTCOME and OUTCOMETIME values.")
 }
+
 # Group by SUBJECT_ID and HADM_ID to find duplicate rows
 admissions_duplicates <- admissions %>%
   group_by(SUBJECT_ID, HADM_ID) %>%
@@ -82,7 +83,7 @@ admissions <- admissions %>%
 
 # This will retain all rows from the callout_data table
 callout_clean <- callout_clean %>%
-  left_join(admissions %>% select(SUBJECT_ID, HADM_ID, ADMITTIME), 
+  left_join(admissions, 
             by = c("SUBJECT_ID", "HADM_ID"))
 
 # Convert both ADMITTIME and OUTCOMETIME to numeric (seconds since Unix epoch)
