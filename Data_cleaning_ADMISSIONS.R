@@ -1,6 +1,9 @@
 # Read admissions from csv
 admissions <- read.csv("data/raw/ADMISSIONS.csv", stringsAsFactors = TRUE)
-admissions %>% View()
+
+# Select necessary columns
+admissions <- admissions %>%
+  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, EDREGTIME, EDOUTTIME, DIAGNOSIS, DISCHARGE_LOCATION, DEATHTIME, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, HOSPITAL_EXPIRE_FLAG)
 
 # Normalize the columns by converting everything to uppercase
 admissions <- admissions %>%
@@ -18,8 +21,7 @@ admissions_clean <- admissions_NA %>%
 
 # Impute missing categorical variables
 admissions_clean <- admissions_clean %>%
-  mutate(LANGUAGE = as.factor(replace_na(as.character(LANGUAGE), "UNKNOWN")),
-         RELIGION = as.factor(replace_na(as.character(RELIGION), "UNKNOWN")),
+  mutate(RELIGION = as.factor(replace_na(as.character(RELIGION), "UNKNOWN")),
          INSURANCE = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")),
          MARITAL_STATUS = as.factor(replace_na(as.character(MARITAL_STATUS), "UNKNOWN")),
          ETHNICITY = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")))
@@ -30,7 +32,7 @@ admissions_clean <-  admissions_clean %>%
          DISCHTIME = ymd_hms(DISCHTIME),
          DEATHTIME = ymd_hms(DEATHTIME),
          EDREGTIME = ymd_hms(EDREGTIME),
-         EDOUTTIME = ymd_hms(EDREGTIME))
+         EDOUTTIME = ymd_hms(EDOUTTIME))
 
 # Check if all times have valid hours (0-23), minutes (0-59), and seconds (0-59)
 time_validation <- admissions_clean %>%
@@ -54,26 +56,7 @@ admissions_clean <- admissions_clean %>%
 admissions_clean <- admissions_clean %>%
   filter(ADMISSION_TYPE %in% c("ELECTIVE", "URGENT", "NEWBORN", "EMERGENCY"))
 
-# Check ADMISSION_LOCATION
-admissions_clean <- admissions_clean %>%
-  filter(ADMISSION_LOCATION %in% c("EMERGENCY ROOM ADMIT",
-                                   "TRANSFER FROM HOSP/EXTRAM",
-                                   "TRANSFER FROM OTHER HEALT",
-                                   "CLINIC REFERRAL/PREMATURE",
-                                   "** INFO NOT AVAILABLE **",
-                                   "TRANSFER FROM SKILLED NUR",
-                                   "TRSF WITHIN THIS FACILITY",
-                                   "HMO REFERRAL/SICK",
-                                   "PHYS REFERRAL/NORMAL DELI"))
-
-# Check DISCHARGE_LOCATION
-unique_discharge_location <- admissions_clean %>%
-  distinct(DISCHARGE_LOCATION)
-
-# Check unique values
-unique_language <- admissions_clean %>%
-  distinct(LANGUAGE)
-
+# Check uniwue values
 unique_insurance <- admissions_clean %>%
   distinct(INSURANCE)
 
@@ -87,7 +70,6 @@ unique_ethnicity <- admissions_clean %>%
   distinct(ETHNICITY)
 
 unique_ethnicity %>% View()
-unique_language %>% View()
 unique_insurance %>% View()
 unique_marital_status %>% View()
 unique_religion %>% View()
@@ -95,21 +77,20 @@ unique_religion %>% View()
 # Create a new column for Ethnicity categories (White, Black, Asian)
 admissions_clean <- admissions_clean %>%
   mutate(
-    ETHNICITY_GROUP = case_when(
+    ETHNICITY = case_when(
       str_detect(ETHNICITY, "WHITE|MIDDLE EASTERN|AMERICAN INDIAN/ALASKA NATIVE|PORTUGUESE|CARIBBEAN ISLAND|HISPANIC|LATINO") ~ "WHITE",
       str_detect(ETHNICITY, "BLACK|AFRICAN|CAPE VERDEAN|HAITIAN") ~ "BLACK",
       str_detect(ETHNICITY, "ASIAN") ~ "ASIAN",
       ETHNICITY %in% c("UNKNOWN/NOT SPECIFIED", "UNABLE TO OBTAIN", "PATIENT DECLINED TO ANSWER", NA) ~ "UNKNOWN",
       TRUE ~ "OTHER" # For all other ethnicities
     ),
-    ETHNICITY_GROUP = as.factor(ETHNICITY_GROUP)
-  ) %>%
-  relocate(ETHNICITY_GROUP, .after = ETHNICITY) 
+    ETHNICITY = as.factor(ETHNICITY)
+  )
 
 # Create a new column for Religion categories (CHRISTIANITY, JUDAISM, ISLAM, HINDUISM, BUDDHISM, OTHER, UNKNOWN)
 admissions_clean <- admissions_clean %>%
   mutate(
-    RELIGION_GROUP = case_when(
+    RELIGION = case_when(
       str_detect(RELIGION, "CATHOLIC|PROTESTANT|BAPTIST|METHODIST|7TH DAY ADVENTIST|UNITARIAN-UNIVERSALIST|EPISCOPALIAN|JEHOVAH|LUTHERAN|CHRISTIAN SCIENTIST|GREEK ORTHODOX|ROMANIAN EAST. ORTH") ~ "CHRISTIANITY",
       str_detect(RELIGION, "JEWISH|HEBREW") ~ "JUDAISM",
       str_detect(RELIGION, "MUSLIM") ~ "ISLAM",
@@ -119,9 +100,8 @@ admissions_clean <- admissions_clean %>%
       RELIGION %in% c("UNKNOWN", "UNOBTAINABLE", "NOT SPECIFIED", NA) ~ "UNKNOWN",
       TRUE ~ "OTHER"
     ),
-    RELIGION_GROUP = as.factor(toupper(RELIGION_GROUP)) # Convert RELIGION_GROUP to a factor and ensure uppercase
-  ) %>%
-  relocate(RELIGION_GROUP, .after = RELIGION) 
+    RELIGION = as.factor(toupper(RELIGION)) # Convert RELIGION_GROUP to a factor and ensure uppercase
+  )
 
 # Create a new column to check if all conditions are met for expired patients
 check_expired <- admissions_clean %>%
@@ -162,24 +142,26 @@ if (all(subject_is_donor$has_organ_donor_diagnosis)) {
   print("Not all patients with 2 death times were donors.")
 }
 
-# Create the TIMETODEATH variable in secs
+# Create the TIMETODEATH variable in seconds
 admissions_with_timetodeath <- admissions_clean %>%
-  group_by(SUBJECT_ID) %>%
   filter(!is.na(DEATHTIME)) %>%
-  arrange(DEATHTIME) %>%
-  slice(1) %>%  
+  arrange(SUBJECT_ID, DEATHTIME) %>%
   mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs"))) %>%
-  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))  # Create flag only for negative TIMETODEATH and when EDREGTIME == EDOUTTIME
+  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))  # Create flag only for negative TIMETODEATH
 
-admissions_clean <- admissions_with_timetodeath %>%
-  arrange(SUBJECT_ID, DEATHTIME) %>%
-  bind_rows(admissions_clean) %>%
-  arrange(SUBJECT_ID, DEATHTIME) %>%
-  mutate(TIMETODEATH = replace(TIMETODEATH, TIMETODEATH == "", 0)) %>%
-  relocate(TIMETODEATH, .after = DEATHTIME) %>%
+# Keep rows with valid TIMETODEATH and no negative time mismatches
+admissions_clean <- admissions_clean %>%
+  left_join(admissions_with_timetodeath %>% select(SUBJECT_ID, TIMETODEATH), by = "SUBJECT_ID") %>%
   filter(is.na(acceptable_negative_timetodeath)) %>%
-  mutate(acceptable_negative_timetodeath = NULL) %>%
-  ungroup()
+  mutate(acceptable_negative_timetodeath = NULL)
+
+# Ensure no duplicates after merging
+admissions_clean <- admissions_clean %>%
+  distinct(SUBJECT_ID, HADM_ID, .keep_all = TRUE)
+
+# Choose necessary columns after checking all data
+admissions_clean <- admissions_clean %>%
+  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY)
 
 # Write cleaned admissions to csv
-write.csv(admissions_clean, "data/raw/ADMISSIONS_clean.csv")
+write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv")
