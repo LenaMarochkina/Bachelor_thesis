@@ -37,3 +37,6 @@ invalid_time_rows <- time_validation %>%
 # Select only necessary columns
 icu_stays_clean <- icu_stays_clean %>%
   select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, INTIME, OUTTIME, LOS)
+
+# Write cleaned icu stays to csv
+write.csv(icu_stays_clean, "data/raw/cleaned/ICUSTAYS_clean.csv")
