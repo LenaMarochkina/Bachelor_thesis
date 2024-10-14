@@ -22,9 +22,9 @@ library(survival)
 # Read data
 
 ```{r read file}
-patients <- read.csv("data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors = TRUE)
-admissions <- read.csv("data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
-icu_stays <- read.csv("data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
+patients <- read.csv("../data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors = TRUE)
+admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
+icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
 
 summary(patients)
 ```
