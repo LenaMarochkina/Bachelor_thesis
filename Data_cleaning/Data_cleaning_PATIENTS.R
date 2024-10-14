@@ -1,3 +1,7 @@
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+
 # Read patients from csv
 patients <- read.csv("data/raw/patients.csv", stringsAsFactors = TRUE)
 

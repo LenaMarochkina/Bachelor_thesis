@@ -1,3 +1,7 @@
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+
 # Read diagnoses from csv
 diagnoses <- read.csv("data/raw/DIAGNOSES_ICD.csv", stringsAsFactors = TRUE)
 
@@ -59,7 +63,7 @@ diagnoses_codes <- diagnoses_codes %>%
     ICD9_CODE == "7806" ~ "Fever and other physiologic disturbances of temperature regulation",
     ICD9_CODE == "7895" ~ "Ascites",
     ICD9_CODE == "9974" ~ "Digestive system complications not elsewhere classified",
-    # Add other significant ICD9 codes and names here
+
     TRUE ~ SHORT_TITLE  # Keep existing short titles for non-significant codes
   ))
   

@@ -1,3 +1,7 @@
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+
 # Read icu_stays from csv
 icu_stays <- read.csv("data/raw/ICUSTAYS.csv", stringsAsFactors = TRUE)
 
