@@ -1,0 +1,155 @@
+---
+title: "Patients_Statistics"
+author: "Elena Marochkina"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 1
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(flextable)
+library(survival)
+```
+
+# Read data
+
+```{r read file}
+patients <- read.csv("data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors = TRUE)
+admissions <- read.csv("data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
+icu_stays <- read.csv("data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
+
+summary(patients)
+```
+
+# Desriptive statistics
+
+## Descriptive statistics for numerical variables
+
+```{r descriptive statistics for numerical vars}
+# Function to calculate 95% confidence interval for the mean
+ci_95 <- function(x) {
+  n <- sum(!is.na(x))
+  if (n < 3) return("Н/П*")
+  se <- sd(x, na.rm = TRUE) / sqrt(n)  # Standard Error
+  mean_x <- mean(x, na.rm = TRUE)
+  ci <- c(mean_x - 1.96 * se, mean_x + 1.96 * se)
+  paste0(round(ci[1], 2), " - ", round(ci[2], 2))
+}
+
+# List of descriptive statistics
+statistics <- list(
+  `_Number of values` = ~as.character(sum(!is.na(.x))),
+  `_No data` = ~as.character(sum(is.na(.x))),
+  `_Mean` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(mean(.x, na.rm = TRUE) %>% round(2))),
+  `_Median` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(median(.x, na.rm = TRUE) %>% round(2))),
+  `_SD` = ~ifelse(sum(!is.na(.x)) < 3, "NA", as.character(sd(.x, na.rm = TRUE) %>% round(2))),
+  `_Q1 - Q3` = ~ifelse(sum(!is.na(.x)) == 0, "NA", paste0(as.character(quantile(.x, 0.25, na.rm = TRUE) %>% round(2)), " - ", as.character(quantile(.x, 0.75, na.rm = TRUE) %>% round(2)))),
+  `_IQR` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(IQR(.x, na.rm = TRUE) %>% round(2))),
+  `_95% CI` = ~ci_95(.x),
+  `_min` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(min(.x, na.rm = TRUE) %>% round(2))),
+  `_max` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(max(.x, na.rm = TRUE) %>% round(2)))
+)
+
+# Summarize the statistics for each numeric variable grouped by TenYearCHD
+patients %>%
+  select(-ROW_ID, -SUBJECT_ID, -EXPIRE_FLAG) %>%
+  select(where(is.numeric)) %>%  # Select only numeric variables
+  summarise(across(everything(), statistics)) %>%  # Apply the statistics to all numeric variables
+  pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
+  rename(`Value` = value) %>%
+  flextable() %>%
+  theme_zebra() %>%
+  merge_v("Variable") %>%
+  width(j = c("Variable", "Stat", "Value"), width = 2)  # Set the width for the columns
+```
+## Descriptive statistics for categorical variables
+
+``` {r}
+# Clean and summarize the categorical data for all factor variables
+patients %>%
+  select(-DOB, -DOD) %>%
+  select(where(is.factor)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),  # Calculate the number of missing values for each variable
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, Value) %>%
+  flextable() %>%
+  theme_zebra() %>%
+  merge_v("Variable")
+```
+# Predicting Death (yes or no): Logistic Regression
+
+This is a binary outcome (death or no death). Logistic regression is commonly used to assess whether age or sex is a significant predictor of mortality.
+
+``` {r}
+# Logistic regression to predict death (assuming 'DEATH' is 1 for death and 0 for survival)
+logistic_model <- glm(EXPIRE_FLAG ~ AGE_AT_ADMISSION + GENDER, data = patients, family = binomial)
+
+# Summary of the model to assess significance
+summary(logistic_model)
+
+# OR calculation
+exp(coef(logistic_model))
+```
+
+**Interpretation:**
+
+- Age at Admission is a significant predictor of death, and older patients are more likely to die, with each year of age increasing the odds of death by about 5.2%.
+
+- Gender is not a significant predictor of death in this model.
+
+#  Predicting Length of Living Days Before Death: Survival Analysis
+
+For patients who died, we can analyze the time they lived before death using survival analysis, such as a Cox proportional hazards model.
+
+``` {r}
+# Merge patients and outcomes datasets by SUBJECT_ID
+merged_data <- patients %>%
+  select(SUBJECT_ID, EXPIRE_FLAG, AGE_AT_ADMISSION, GENDER) %>%
+  left_join(admissions %>% select (SUBJECT_ID, TIMETODEATH), by = "SUBJECT_ID") 
+
+# Cox model to assess time until death (assuming 'LIVING_DAYS' is the length of living days)
+cox_model <- coxph(Surv(TIMETODEATH, EXPIRE_FLAG) ~ AGE_AT_ADMISSION + GENDER, data = merged_data)
+
+# Summary of the Cox model
+summary(cox_model)
+```
+
+**Interpretation:**
+
+- Age at Admission: Each additional year of age is associated with a 0.44% higher risk of death. Although the effect size is small, age is a significant predictor of time to death.
+- Gender (Male): Being male is associated with a 6.8% lower risk of death compared to being female, and this effect is statistically significant.
+
+# Predicting Length of ICU Stay: Linear Regression
+
+``` {r}
+merged_data_2 <- patients %>%
+  select(SUBJECT_ID, AGE_AT_ADMISSION, GENDER) %>%
+  left_join(icu_stays %>% select (SUBJECT_ID, LOS), by = "SUBJECT_ID") 
+
+# Linear regression to predict ICU stay duration (assuming 'ICU_STAY' is the number of days in ICU)
+icu_model <- lm(LOS ~ AGE_AT_ADMISSION + GENDER, data = merged_data_2)
+
+# Summary of the linear model
+summary(icu_model)
+```
+**Interpretation:**
+
+- Age at Admission:
+Older age is associated with slightly shorter ICU stays (about 0.058 fewer days per year of age). Although statistically significant, the effect is small.
+
+- Gender:
+Males tend to have slightly shorter ICU stays (by about 0.16 days) compared to females. This effect is also statistically significant but small in size.
