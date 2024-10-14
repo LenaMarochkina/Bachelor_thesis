@@ -1,3 +1,11 @@
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(furrr)
+library(httr)
+library(xml2)
+library(progress)
+
 # Read prescriptions from csv
 prescriptions <- read.csv("data/raw/PRESCRIPTIONS.csv", stringsAsFactors = TRUE)
 
@@ -298,11 +306,6 @@ prescriptions_clean <- prescriptions_clean %>%
   ) %>%
   select(-rxcui)
 
-na <- prescriptions_clean %>%
-  filter(is.na(RXCUI)) %>%
-  count(COMBINED_INFO, name = "Frequency") %>%  # Count occurrences of each unique COMBINED_INFO value
-  arrange(desc(Frequency))  # Arrange the results in descending order of frequency
-
 # Function to get ATC data using the RxClass API
 get_atc_info <- function(rxcui) {
   url <- paste0("https://rxnav.nlm.nih.gov/REST/rxclass/class/byRxcui.xml?rxcui=", rxcui, "&relaSource=ATC")
@@ -314,7 +317,6 @@ get_atc_info <- function(rxcui) {
     # Parse XML response to extract ATC information
     atc_id <- xml_text(xml_find_first(data, "//rxclassMinConceptItem/classId"))
     atc_name <- xml_text(xml_find_first(data, "//rxclassMinConceptItem/className"))
-    atc_type <- xml_text(xml_find_first(data, "//rxclassMinConceptItem/classType"))
 
     return(list(RXCUI = rxcui, ATC_ID = atc_id, ATC_NAME = atc_name, ATC_TYPE = atc_type))
   } else {
@@ -368,16 +370,6 @@ atc_data <- fetch_atc_info_parallel(unique_rxcui_list)
 prescriptions_clean <- prescriptions_clean %>%
   left_join(atc_data, by = "RXCUI")
 
-
-
-top_50_drugs <- prescriptions_clean %>%
-  group_by(ATC_ID, DRUG_NAME_GENERIC) %>%
-  summarise(Count = n()) %>%  # Count occurrences of each combination
-  arrange(desc(Count)) %>%  # Sort by count in descending order
-  slice_head(n = 50)
-
-
-
 # Function to manually update the ATC codes for specific drugs
 update_atc_codes <- function(data) {
   data <- data %>%
@@ -396,3 +388,6 @@ update_atc_codes <- function(data) {
 
   return(data)
 }
+
+# Write cleaned admissions to csv
+write.csv(prescriptions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv")

@@ -1,3 +1,6 @@
+library(dplyr)
+library(tidyverse)
+
 # Read admissions from csv
 admissions <- read.csv("data/raw/ADMISSIONS.csv", stringsAsFactors = TRUE)
 
