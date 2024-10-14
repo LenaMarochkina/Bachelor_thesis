@@ -3,7 +3,7 @@ library(tidyverse)
 library(lubridate)
 
 # Read patients from csv
-patients <- read.csv("data/raw/patients.csv", stringsAsFactors = TRUE)
+patients <- read.csv("data/raw/PATIENTS.csv", stringsAsFactors = TRUE)
 
 # Read admissions from csv
 admissions <- read.csv("data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
@@ -102,9 +102,9 @@ patients_with_abnormal_ages <- patients_clean %>%
   filter(!sapply(AGE_AT_ADMISSION, check_age_range), !sapply(AGE_AT_DEATH, check_age_range))
 
 patients_clean <- patients_clean %>%
-  select(-DOD_SSN, -DOD_HOSP, -ADMITTIME, -EXPIRE_FLAG)
+  select(-DOD_SSN, -DOD_HOSP, -ADMITTIME)
 
 # Write cleaned patients data to csv
-write.csv(patients_clean, "data/raw/cleaned/PATIENTS_clean.csv")
+write.csv(patients_clean, "data/raw/cleaned/PATIENTS_clean.csv", row.names = FALSE)
 
 

@@ -38,9 +38,16 @@ time_validation <- icu_stays_clean %>%
 invalid_time_rows <- time_validation %>%
   filter(valid_time == FALSE)
 
+# Create SEQ_NUM of icu stays for each patient according to INTIME
+icu_stays_clean <- icu_stays_clean %>%
+  arrange(SUBJECT_ID, INTIME) %>%  # Sort by SUBJECT_ID and INTIME
+  group_by(SUBJECT_ID) %>%  # Group by patient
+  mutate(SEQ_NUM = row_number()) %>%  # Create sequence number for each ICU stay
+  ungroup()  # Ungroup to remove grouping after the operation
+
 # Select only necessary columns
 icu_stays_clean <- icu_stays_clean %>%
-  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, INTIME, OUTTIME, LOS)
+  select(SUBJECT_ID, HADM_ID, ICUSTAY_ID, INTIME, OUTTIME, LOS, SEQ_NUM)
 
 # Write cleaned icu stays to csv
 write.csv(icu_stays_clean, "data/raw/cleaned/ICUSTAYS_clean.csv")

@@ -149,7 +149,12 @@ if (all(subject_is_donor$has_organ_donor_diagnosis)) {
 admissions_with_timetodeath <- admissions_clean %>%
   filter(!is.na(DEATHTIME)) %>%
   arrange(SUBJECT_ID, HADM_ID, DEATHTIME) %>%
-  mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs")))
+  mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs")),
+         # Check for negative TIMETODEATH and recalculate if necessary
+         TIMETODEATH = ifelse(TIMETODEATH < 0, as.numeric(difftime(ADMITTIME, DEATHTIME, units = "secs")), TIMETODEATH))
+
+# View the result to ensure TIMETODEATH is correctly calculated
+summary(admissions_with_timetodeath$TIMETODEATH)
 
 # Ensure that each SUBJECT_ID and HADM_ID is unique in admissions_with_timetodeath
 admissions_with_timetodeath <- admissions_with_timetodeath %>%
@@ -178,4 +183,4 @@ admissions_clean <- admissions_clean %>%
   select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, TIMETODEATH, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY)
 
 # Write cleaned admissions to csv
-write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv")
+write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)
