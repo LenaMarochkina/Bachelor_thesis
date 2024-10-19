@@ -63,7 +63,6 @@ diagnoses_codes <- diagnoses_codes %>%
     ICD9_CODE == "7806" ~ "Fever and other physiologic disturbances of temperature regulation",
     ICD9_CODE == "7895" ~ "Ascites",
     ICD9_CODE == "9974" ~ "Digestive system complications not elsewhere classified",
-
     TRUE ~ SHORT_TITLE  # Keep existing short titles for non-significant codes
   ))
   
