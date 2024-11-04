@@ -1,5 +1,5 @@
 ---
-title: "Patients_Statistics"
+title: "Statistical Analysis"
 author: "Elena Marochkina"
 date: "`r Sys.Date()`"
 output: 
@@ -10,30 +10,38 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+``` {r libraries, set colors}
 library(tidyverse)
 library(readr)
 library(dplyr)
 library(tidyr)
 library(flextable)
-library(survival)
+library(officer)
+library(RColorBrewer)
+
+# Custom theme for visualisations
+theme_custom <- theme_minimal() +
+  theme (
+    plot.title = element_text(size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    strip.text = element_text(size = 10),
+    axis.text = element_text(size = 8),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black"),
+  )
+
+# Palette for visualisations
+color_palette <- c(brewer.pal(9, "Pastel1"), brewer.pal(8, "Pastel2"))
+
 ```
 
-# Read data
-
-```{r read file}
-patients <- read.csv("../data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors = TRUE)
-admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
-icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
-
-summary(patients)
-```
-
-# Desriptive statistics
-
-## Descriptive statistics for numerical variables
-
-```{r descriptive statistics for numerical vars}
+``` {r general functions}
 # Function to calculate 95% confidence interval for the mean
 ci_95 <- function(x) {
   n <- sum(!is.na(x))
@@ -57,20 +65,226 @@ statistics <- list(
   `_min` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(min(.x, na.rm = TRUE) %>% round(2))),
   `_max` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(max(.x, na.rm = TRUE) %>% round(2)))
 )
+```
 
-# Summarize the statistics for each numeric variable grouped by TenYearCHD
+# 1.    Outcomes Data
+## 1.1.   Read Data
+
+```{r read files}
+patients <- read.csv("../data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors = TRUE) %>%
+  mutate(across(c(EXPIRE_FLAG), as.factor))
+admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
+icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
+
+skimr::skim(patients$EXPIRE_FLAG)
+skimr::skim(admissions$TIMETODEATH)
+skimr::skim(icu_stays$LOS)
+
+```
+
+## 1.2.   Desriptive Statistics and Visualisation Analysis
+### 1.2.1.    Outcome 1: Death Status
+
+``` {r descriptive statistics for death status}
 patients %>%
-  select(-ROW_ID, -SUBJECT_ID, -EXPIRE_FLAG) %>%
-  select(where(is.numeric)) %>%  # Select only numeric variables
-  summarise(across(everything(), statistics)) %>%  # Apply the statistics to all numeric variables
+  select(EXPIRE_FLAG) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, Value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+``` {r barplot for death status}
+# Visualization for EXPIRE_FLAG in patients dataset
+ggplot(patients, aes(x = as.factor(EXPIRE_FLAG), fill = as.factor(EXPIRE_FLAG))) +
+  geom_bar(color = "black") +
+    geom_text(stat = "count", aes(label = after_stat(count)),
+            size = 3, 
+            fontface = "bold", 
+            vjust = -0.5) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)), replace = FALSE), labels = c("0" = "Not Dead", "1" = "Dead")) +
+  labs(title = "Distribution of Death Status", x = "Death Status", y = "Count", fill = "Death Status") +
+  theme_custom
+
+```
+
+- There were 30,761 patients who did not die (labeled "Not Dead").
+- There were 15,759 patients who died (labeled "Dead").
+
+This indicates that a higher proportion of patients in the dataset survived compared to those who did not. The ratio of surviving patients to deceased patients is approximately 2:1, which suggests that while mortality is significant, more patients survived than passed away during the period considered.
+
+### 1.2.2.    Outcome 2: Length of Survival
+
+```{r descriptive statistics for length of survival}
+admissions %>%
+  select(TIMETODEATH_DAYS) %>%
+  summarise(across(everything(), statistics)) %>%
   pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
   rename(`Value` = value) %>%
   flextable() %>%
-  theme_zebra() %>%
   merge_v("Variable") %>%
-  width(j = c("Variable", "Stat", "Value"), width = 2)  # Set the width for the columns
+  width(j = c("Variable", "Stat", "Value"), width = 2) %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
 ```
-## Descriptive statistics for categorical variables
+
+**Outliers Check**
+
+``` {r outliers check for length of survival}
+# Calculate mean and standard deviation
+mean_value <- mean(admissions$TIMETODEATH_DAYS, na.rm = TRUE)
+sd_value <- sd(admissions$TIMETODEATH_DAYS, na.rm = TRUE)
+
+# Define the 3-sigma range
+lower_bound <- mean_value - 3 * sd_value
+upper_bound <- mean_value + 3 * sd_value
+
+# Identify outliers
+outliers <- admissions %>%
+  filter(TIMETODEATH_DAYS < lower_bound | TIMETODEATH_DAYS > upper_bound)
+
+# Calculate the number and percentage of outliers
+num_outliers <- nrow(outliers)
+total_values <- nrow(admissions)
+percent_outliers <- (num_outliers / total_values) * 100
+
+# Print the number and percentage of outliers
+cat("Number of outliers:", num_outliers, "\n")
+cat("Percentage of outliers:", round(percent_outliers, 2), "%\n")
+
+# Filter out the outliers
+admissions <- admissions %>%
+  filter(TIMETODEATH_DAYS >= lower_bound & TIMETODEATH_DAYS <= upper_bound)
+```
+
+Based on the small percentage of outliers observed, it was decided to filter them out. These outliers could potentially represent patients who were in a prolonged coma or had unusually extended hospital stays.
+
+``` {r boxplot for length of survival}
+# Boxplot for TIMETODEATH
+ggplot(admissions, aes(y = TIMETODEATH_DAYS)) +
+  geom_boxplot(fill = color_palette[4], color = "black") +
+  labs(title = "Boxplot of Time to Death (in Days)",
+       y = "Time to Death (in days)") +
+  theme_custom
+
+```
+
+``` {r density plot for length of survival}
+ggplot(admissions, aes(x = TIMETODEATH_DAYS)) +
+  geom_density(fill = color_palette[14], alpha = 0.7) +
+  labs(title = "Density Plot of Time to Death (in Days)",
+       x = "Time to Death (in days)",
+       y = "Density") +
+  theme_custom
+```
+
+The boxplot and density plot show that most patients died within 0 to 30 days, with a median around 10 days. There are still several outliers, indicating some patients survived much longer, possibly due to unique conditions such as prolonged illness or coma.
+
+### 1.2.3.    Outcome 3: Length of ICU Stay
+
+```{r descriptive statistics for length of ICU stay}
+icu_stays %>%
+  select(LOS) %>%
+  summarise(across(everything(), statistics)) %>%
+  pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
+  rename(`Value` = value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  width(j = c("Variable", "Stat", "Value"), width = 2) %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+**Check for outliers**
+
+``` {r check for outliers for length of ICU stay}
+# Calculate mean and standard deviation for LOS variable
+mean_los <- mean(icu_stays$LOS, na.rm = TRUE)
+sd_los <- sd(icu_stays$LOS, na.rm = TRUE)
+
+# Identify outliers using the 3-sigma rule
+icu_stays$outlier_los <- ifelse(
+  icu_stays$LOS > (mean_los + 3 * sd_los) | icu_stays$LOS < (mean_los - 3 * sd_los),
+  TRUE, 
+  FALSE
+)
+
+# Count the number and percentage of outliers
+num_outliers_los <- sum(icu_stays$outlier_los, na.rm = TRUE)
+percent_outliers_los <- (num_outliers_los / nrow(icu_stays)) * 100
+
+# Print results
+cat("Number of outliers in LOS:", num_outliers_los, "\n")
+cat("Percentage of outliers in LOS:", round(percent_outliers_los, 2), "%\n")
+
+# Filter out the outliers
+icu_stays <- icu_stays %>%
+  filter(outlier_los == FALSE)
+
+# Drop the outlier column after filtering
+icu_stays$outlier_los <- NULL
+```
+
+Based on the relatively small percentage of outliers (1.95%), it was decided to filter them out from the icu_stays dataset. This filtering helps ensure a more robust analysis by excluding extreme cases that could disproportionately impact the results. It's worth noting that some of these outliers could represent unique cases, such as patients in a coma or those with extended ICU stays due to complex medical conditions.
+
+``` {r violin plot for length of ICU stay}
+ggplot(icu_stays, aes(x = "", y = LOS)) +
+  geom_violin(fill = color_palette[10], color = "black") +
+  geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
+  labs(title = "Violin Plot of Length of ICU Stay (LOS)",
+       y = "Length of ICU Stay (Days)",
+       x = "") +
+  theme_minimal()
+
+```
+
+This plot highlights that most patients had shorter ICU stays, but there are a few cases with extended durations that could represent unique medical conditions or complications.
+
+# 2.    Patients Data
+## 2.1.   Read and Prepare Data
+
+```{r read file}
+patients <- patients %>%
+  mutate(
+    DOB = as.POSIXct(DOB, format = "%Y-%m-%d"),
+    DOD = as.POSIXct(DOD, format = "%Y-%m-%d")
+  )
+
+skimr::skim(patients)
+```
+
+## 2.2.   Desriptive statistics
+### 2.2.1.    Descriptive statistics for numerical variables
+
+```{r descriptive statistics for numerical vars}
+# Summarize the statistics for each numeric variable
+patients %>%
+  select(-ROW_ID, -SUBJECT_ID, -EXPIRE_FLAG) %>%
+  select(where(is.numeric)) %>% 
+  summarise(across(everything(), statistics)) %>%
+  pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
+  rename(`Value` = value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  width(j = c("Variable", "Stat", "Value"), width = 2) %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+### 2.2.2.    Descriptive statistics for categorical variables
 
 ``` {r}
 # Clean and summarize the categorical data for all factor variables
@@ -81,12 +295,111 @@ patients %>%
   group_by(Variable, Value) %>%
   summarise(n = n(), .groups = 'drop') %>%
   group_by(Variable) %>%
-  mutate(`No data` = sum(is.na(Value)),  # Calculate the number of missing values for each variable
+  mutate(`No data` = sum(is.na(Value)),
          `% by group` = (n / sum(n)) * 100) %>%
   ungroup() %>%
   select(Variable, Value, n, `% by group`, `No data`) %>%
   arrange(Variable, Value) %>%
   flextable() %>%
-  theme_zebra() %>%
-  merge_v("Variable")
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
 ```
+
+## 2.3.   Visualization Analysis by Outcome
+### 2.3.1.    Outcome 1: Death Status by Patients Data
+
+``` {r death status by gender}
+ggplot(patients, aes(x = GENDER, fill = EXPIRE_FLAG)) +
+  geom_bar(position = position_dodge2(width = 0.9), color = "black") +
+  geom_text(stat = 'count', aes(label = after_stat(count)), position = position_dodge2(width = 0.9), vjust = -0.5) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)), replace = FALSE), labels = c("0" = "Not Dead", "1" = "Dead")) +
+  labs(title = "Death Status by Gender", x = "Gender", y = "Count", fill = "Death Status") +
+  theme_custom
+```
+
+- Males (M) have a higher count in both survival (17,597) and death (8,524) categories compared to females.
+- Females (F) have a lower count, with 13,164 surviving and 7,235 deceased.
+
+This suggests that while the total number of male patients is higher, the proportion of deceased individuals appears similar across genders. 
+
+```{r death status by age at admission}
+ggplot(patients, aes(x = AGE_AT_ADMISSION, fill = EXPIRE_FLAG)) +
+  geom_histogram(binwidth = 5, alpha = 0.7, position = "identity", color = "black") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
+  labs(title = "Death Status by Age at Admission", 
+       x = "Age at Admission", 
+       y = "Count", 
+       fill = "Death Status") +
+  theme_custom
+```
+
+- High Frequency in Infants (Age 0): There is a significant spike in the number of admissions at age 0, with the vast majority being alive. 
+- Increasing Death Rate with Age: The number of deaths increases as age at admission increases, particularly noticeable in older age groups (60+ years). This suggests a higher mortality rate with increasing age.
+- Peak in Midlife and Elderly: The number of admissions peaks around middle age (45–65) with a higher number of surviving patients but a noticeable increase in death cases as age progresses.
+
+### 2.3.2.    Outcome 2: Length of Survival by Patients Data
+
+```{r length of survival by age and gender}
+# Merge admissions with patients data to include AGE_AT_ADMISSION
+combined_data <- admissions %>%
+  left_join(patients, by = "SUBJECT_ID")
+
+# Create a new age group column based on quintiles
+age_breaks <- quantile(combined_data$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
+age_labels <- paste0("(", round(head(age_breaks, -1)), "-", round(tail(age_breaks, -1)), "]")
+
+combined_data <- combined_data %>%
+  mutate(AGE_QUINTILE = cut(AGE_AT_ADMISSION, 
+                            breaks = age_breaks,
+                            include.lowest = TRUE,
+                            labels = age_labels))
+
+# Plot including age quintiles as facets
+ggplot(combined_data, aes(x = GENDER, y = TIMETODEATH_DAYS, fill = GENDER)) +
+  geom_boxplot() +
+  facet_wrap(~ AGE_QUINTILE, ncol = 3) +  # Facet by age quintiles
+  labs(title = "Length of Survival by Gender and Age Quintile",
+       x = "Gender",
+       y = "Time to Death (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
+  theme_custom
+```
+
+The plot allows for the visualization of how gender and age interact to influence survival times. It suggests that older females tend to have longer survival times than older males, but there are significant outliers in each group. The presence of NA age values indicates patients whose age could not be determined.
+
+### 2.3.3.    Outcome 3: Length of ICU Stay by Patients Data
+
+```{r length of ICU stay by gender and age}
+# Merge icu_stays with patients data to include AGE_AT_ADMISSION
+combined_data_los <- icu_stays %>%
+  left_join(patients, by = "SUBJECT_ID") %>%
+  left_join(admissions, by = c("SUBJECT_ID", "HADM_ID"))  # Ensure you join with admissions to get TIMETODEATH if needed
+
+# Create a new age group column based on quintiles
+age_breaks_los <- quantile(combined_data_los$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
+age_labels_los <- paste0("(", round(head(age_breaks_los, -1)), "-", round(tail(age_breaks_los, -1)), "]")
+
+combined_data_los <- combined_data_los %>%
+  mutate(AGE_QUINTILE = cut(AGE_AT_ADMISSION, 
+                             breaks = age_breaks_los,
+                             include.lowest = TRUE,
+                             labels = age_labels_los))
+
+# Plot including age quintiles as facets for Length of Stay (LOS)
+ggplot(combined_data_los, aes(x = GENDER, y = LOS, fill = GENDER)) +
+  geom_boxplot() +
+  facet_wrap(~ AGE_QUINTILE, ncol = 3) +
+  labs(title = "Length of Stay (LOS) by Gender and Age Quintile",
+       x = "Gender",
+       y = "Length of Stay (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
+  theme_custom
+```
+
+Overall, this boxplot provides valuable insights into how gender and age influence the length of ICU stays, indicating that females may generally experience longer stays than males across the age spectrum, while patients with missing age data may represent a different patient population.
+
+# Exploratory analysis
+
+``` {r}
