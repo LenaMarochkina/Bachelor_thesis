@@ -174,13 +174,16 @@ admissions_clean <- admissions_clean %>%
   filter(is.na(acceptable_negative_timetodeath)) %>%
   select(-acceptable_negative_timetodeath)  # Remove the flag column after filtering
 
+admissions_clean <- admissions_clean %>%
+  mutate(TIMETODEATH_DAYS = TIMETODEATH / (60 * 60 * 24))
+
 # Ensure no duplicates after merging
 admissions_clean <- admissions_clean %>%
   distinct(SUBJECT_ID, HADM_ID, .keep_all = TRUE)
 
 # Choose necessary columns after checking all data
 admissions_clean <- admissions_clean %>%
-  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, TIMETODEATH, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY)
+  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, TIMETODEATH, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, TIMETODEATH_DAYS)
 
 # Write cleaned admissions to csv
 write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)
