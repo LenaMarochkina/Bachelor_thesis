@@ -5,7 +5,7 @@ date: "`r Sys.Date()`"
 output: 
   html_document:
     toc: yes
-    toc_depth: 1
+    toc_depth: 4
 
 ---
 
@@ -21,6 +21,9 @@ library(tidyr)
 library(flextable)
 library(officer)
 library(RColorBrewer)
+library(broom)
+library(tibble)
+library(nortest)
 
 # Custom theme for visualisations
 theme_custom <- theme_minimal() +
@@ -40,7 +43,6 @@ theme_custom <- theme_minimal() +
 color_palette <- c(brewer.pal(9, "Pastel1"), brewer.pal(8, "Pastel2"))
 
 ```
-
 ``` {r general functions}
 # Function to calculate 95% confidence interval for the mean
 ci_95 <- function(x) {
@@ -65,6 +67,67 @@ statistics <- list(
   `_min` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(min(.x, na.rm = TRUE) %>% round(2))),
   `_max` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(max(.x, na.rm = TRUE) %>% round(2)))
 )
+
+# Function to check statistical hypothesis (one-way criteria)
+perform_statistical_tests <- function(data, dependent_var, independent_var, variable_name) {
+  result_table <- tibble(Variable = character(),
+                         Performed_test = character(),
+                         Result = character(),
+                         Interpretation = character())
+  
+  # Check the type of independent variable
+  if (is.numeric(data[[independent_var]])) {
+    # If independent variable is numeric
+    
+    # Anderson-Darling test for normality
+    ad_result <- nortest::ad.test(data[[independent_var]][!is.na(data[[independent_var]])])
+    
+    if (ad_result$p.value > 0.05) {
+      # Normal distribution
+      t_test_result <- t.test(data[[independent_var]] ~ data[[dependent_var]], data = data)
+      result_table <- result_table %>%
+        add_row(
+          Variable = variable_name,
+          Performed_test = "T-Test",
+          Result = format.pval(t_test_result$p.value, digits = 2, scientific = TRUE),
+          Interpretation = ifelse(t_test_result$p.value < 0.05, "Significant", "Not significant")
+        )
+    } else {
+      # Not normally distributed
+      mw_test_result <- wilcox.test(data[[independent_var]] ~ data[[dependent_var]], data = data)
+      result_table <- result_table %>%
+        add_row(
+          Variable = variable_name,
+          Performed_test = "Mann-Whitney U Test",
+          Result = format.pval(mw_test_result$p.value, digits = 2, scientific = TRUE),
+          Interpretation = ifelse(mw_test_result$p.value < 0.05, "Significant", "Not significant")
+        )
+    }
+    
+  } else if (is.factor(data[[independent_var]]) || is.character(data[[independent_var]])) {
+    # If independent variable is categorical
+    
+    # Create a contingency table
+    contingency_table <- table(data[[independent_var]], data[[dependent_var]])
+    
+
+      # Use Chi-squared test
+      chi_square_result <- chisq.test(contingency_table)
+      result_table <- result_table %>%
+        add_row(
+          Variable = variable_name,
+          Performed_test = "Chi-Squared Test",
+          Result = format.pval(chi_square_result$p.value, digits = 2, scientific = TRUE),
+          Interpretation = ifelse(chi_square_result$p.value < 0.05, "Significant", "Not significant")
+        )
+  } else {
+    stop("Independent variable must be either numeric or categorical.")
+  }
+  
+  return(result_table)
+}
+
+
 ```
 
 # 1.    Outcomes Data
@@ -75,10 +138,6 @@ patients <- read.csv("../data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors 
   mutate(across(c(EXPIRE_FLAG), as.factor))
 admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
 icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
-
-skimr::skim(patients$EXPIRE_FLAG)
-skimr::skim(admissions$TIMETODEATH)
-skimr::skim(icu_stays$LOS)
 
 ```
 
@@ -164,7 +223,8 @@ cat("Number of outliers:", num_outliers, "\n")
 cat("Percentage of outliers:", round(percent_outliers, 2), "%\n")
 
 # Filter out the outliers
-admissions <- admissions %>%
+admissions_outcome <- admissions %>%
+  select(TIMETODEATH_DAYS,TIMETODEATH, SUBJECT_ID, HADM_ID) %>%
   filter(TIMETODEATH_DAYS >= lower_bound & TIMETODEATH_DAYS <= upper_bound)
 ```
 
@@ -172,7 +232,7 @@ Based on the small percentage of outliers observed, it was decided to filter the
 
 ``` {r boxplot for length of survival}
 # Boxplot for TIMETODEATH
-ggplot(admissions, aes(y = TIMETODEATH_DAYS)) +
+ggplot(admissions_outcome, aes(y = TIMETODEATH_DAYS)) +
   geom_boxplot(fill = color_palette[4], color = "black") +
   labs(title = "Boxplot of Time to Death (in Days)",
        y = "Time to Death (in days)") +
@@ -181,7 +241,7 @@ ggplot(admissions, aes(y = TIMETODEATH_DAYS)) +
 ```
 
 ``` {r density plot for length of survival}
-ggplot(admissions, aes(x = TIMETODEATH_DAYS)) +
+ggplot(admissions_outcome, aes(x = TIMETODEATH_DAYS)) +
   geom_density(fill = color_palette[14], alpha = 0.7) +
   labs(title = "Density Plot of Time to Death (in Days)",
        x = "Time to Death (in days)",
@@ -230,7 +290,8 @@ cat("Number of outliers in LOS:", num_outliers_los, "\n")
 cat("Percentage of outliers in LOS:", round(percent_outliers_los, 2), "%\n")
 
 # Filter out the outliers
-icu_stays <- icu_stays %>%
+icu_stays_outcome <- icu_stays %>%
+  select(LOS, SUBJECT_ID, HADM_ID, outlier_los) %>%
   filter(outlier_los == FALSE)
 
 # Drop the outlier column after filtering
@@ -240,7 +301,7 @@ icu_stays$outlier_los <- NULL
 Based on the relatively small percentage of outliers (1.95%), it was decided to filter them out from the icu_stays dataset. This filtering helps ensure a more robust analysis by excluding extreme cases that could disproportionately impact the results. It's worth noting that some of these outliers could represent unique cases, such as patients in a coma or those with extended ICU stays due to complex medical conditions.
 
 ``` {r violin plot for length of ICU stay}
-ggplot(icu_stays, aes(x = "", y = LOS)) +
+ggplot(icu_stays_outcome, aes(x = "", y = LOS)) +
   geom_violin(fill = color_palette[10], color = "black") +
   geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
   labs(title = "Violin Plot of Length of ICU Stay (LOS)",
@@ -255,7 +316,7 @@ This plot highlights that most patients had shorter ICU stays, but there are a f
 # 2.    Patients Data
 ## 2.1.   Read and Prepare Data
 
-```{r read file}
+```{r read file patients}
 patients <- patients %>%
   mutate(
     DOB = as.POSIXct(DOB, format = "%Y-%m-%d"),
@@ -307,7 +368,7 @@ patients %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-## 2.3.   Visualization Analysis by Outcome
+## 2.3.   Visualisation Analysis by Outcome
 ### 2.3.1.    Outcome 1: Death Status by Patients Data
 
 ``` {r death status by gender}
@@ -318,6 +379,7 @@ ggplot(patients, aes(x = GENDER, fill = EXPIRE_FLAG)) +
   labs(title = "Death Status by Gender", x = "Gender", y = "Count", fill = "Death Status") +
   theme_custom
 ```
+
 
 - Males (M) have a higher count in both survival (17,597) and death (8,524) categories compared to females.
 - Females (F) have a lower count, with 13,164 surviving and 7,235 deceased.
@@ -343,21 +405,21 @@ ggplot(patients, aes(x = AGE_AT_ADMISSION, fill = EXPIRE_FLAG)) +
 
 ```{r length of survival by age and gender}
 # Merge admissions with patients data to include AGE_AT_ADMISSION
-combined_data <- admissions %>%
+admissions_patients <- admissions_outcome %>%
   left_join(patients, by = "SUBJECT_ID")
 
 # Create a new age group column based on quintiles
-age_breaks <- quantile(combined_data$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
+age_breaks <- quantile(admissions_patients$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
 age_labels <- paste0("(", round(head(age_breaks, -1)), "-", round(tail(age_breaks, -1)), "]")
 
-combined_data <- combined_data %>%
+admissions_patients <- admissions_patients %>%
   mutate(AGE_QUINTILE = cut(AGE_AT_ADMISSION, 
                             breaks = age_breaks,
                             include.lowest = TRUE,
                             labels = age_labels))
 
 # Plot including age quintiles as facets
-ggplot(combined_data, aes(x = GENDER, y = TIMETODEATH_DAYS, fill = GENDER)) +
+ggplot(admissions_patients, aes(x = GENDER, y = TIMETODEATH_DAYS, fill = GENDER)) +
   geom_boxplot() +
   facet_wrap(~ AGE_QUINTILE, ncol = 3) +  # Facet by age quintiles
   labs(title = "Length of Survival by Gender and Age Quintile",
@@ -373,9 +435,8 @@ The plot allows for the visualization of how gender and age interact to influenc
 
 ```{r length of ICU stay by gender and age}
 # Merge icu_stays with patients data to include AGE_AT_ADMISSION
-combined_data_los <- icu_stays %>%
-  left_join(patients, by = "SUBJECT_ID") %>%
-  left_join(admissions, by = c("SUBJECT_ID", "HADM_ID"))  # Ensure you join with admissions to get TIMETODEATH if needed
+combined_data_los <- icu_stays_outcome %>%
+  left_join(patients, by = "SUBJECT_ID")
 
 # Create a new age group column based on quintiles
 age_breaks_los <- quantile(combined_data_los$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
@@ -400,6 +461,104 @@ ggplot(combined_data_los, aes(x = GENDER, y = LOS, fill = GENDER)) +
 
 Overall, this boxplot provides valuable insights into how gender and age influence the length of ICU stays, indicating that females may generally experience longer stays than males across the age spectrum, while patients with missing age data may represent a different patient population.
 
-# Exploratory analysis
+## 2.4.   Exploratory analysis
+### 2.4.1.    Outcome 1: Death Status by Patients Data
 
 ``` {r}
+# Perform the statistical tests for both variables
+result_age <- perform_statistical_tests(patients, "EXPIRE_FLAG", "AGE_AT_ADMISSION", "Age")
+result_sex <- perform_statistical_tests(patients, "EXPIRE_FLAG", "GENDER", "Gender")
+
+# Merge the results
+merged_results <- bind_rows(result_age, result_sex)
+print(merged_results)
+```
+
+# 3.    Admissions Data
+## 3.1.   Read and Prepare Data
+
+```{r read file}
+admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE) %>%
+  mutate(
+    ADMITTIME = as.POSIXct(ADMITTIME, format = "%Y-%m-%d %H:%M:%S"),
+    DISCHTIME = as.POSIXct(ADMITTIME, format = "%Y-%m-%d %H:%M:%S"),
+    DEATHTIME = as.POSIXct(DEATHTIME, format = "%Y-%m-%d %H:%M:%S")
+  )
+
+skimr::skim(admissions)
+```
+
+## 3.2.   Desriptive statistics
+### 3.2.1.    Descriptive statistics for categorical variables
+
+``` {r}
+# Clean and summarize the categorical data for all factor variables
+admissions %>%
+  select(ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
+  select(where(is.factor)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, Value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+## 3.3.   Visualisation Analysis by Outcome
+### 3.3.1.    Outcome 1: Death Status by Admissions Data
+
+``` {r death status by admissions data}
+patients_admissions <- patients %>%
+  left_join(admissions, by = "SUBJECT_ID")
+
+# Prepare the data for plotting
+patients_admissions_long <- patients_admissions %>%
+  select(EXPIRE_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
+  pivot_longer(cols = -EXPIRE_FLAG, names_to = "Variable", values_to = "Value")
+
+# List of categorical variables to plot
+categorical_vars <- c("ADMISSION_TYPE", "INSURANCE", "RELIGION", "MARITAL_STATUS", "ETHNICITY")
+
+# Loop through each variable and create a bar plot
+for (var in categorical_vars) {
+  p <- ggplot(patients_admissions_long[patients_admissions_long$Variable == var, ], aes(x = Value, fill = EXPIRE_FLAG)) +
+    geom_bar(position = "dodge2", color = "black") +
+    geom_text(stat = "count", aes(label = after_stat(count)), 
+              position = position_dodge(width = 0.9), 
+              vjust = -0.5, size = 3) +  # Adjust label position and size
+    labs(title = paste("Death Status by", var),
+         x = "Category",
+         y = "Count",
+         fill = "Death Status") +
+    theme_custom +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+    scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG))), labels = c("0" = "Not Dead", "1" = "Dead"))
+  
+  # Print or save the plot
+  print(p)
+}
+```
+
+## 3.4.   Exploratory analysis
+### 3.4.1.    Outcome 1: Death Status by Patients Data
+
+``` {r}
+# Perform the statistical tests for both variables
+result_ADMISSION_TYPE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
+result_INSURANCE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "INSURANCE", "INSURANCE")
+result_RELIGION <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "RELIGION", "RELIGION")
+result_MARITAL_STATUS <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "MARITAL_STATUS", "MARITAL_STATUS")
+result_ETHNICITY <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ETHNICITY", "ETHNICITY")
+
+# Merge the results
+merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
+print(merged_results)
+```
