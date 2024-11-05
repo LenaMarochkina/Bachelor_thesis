@@ -77,14 +77,22 @@ unique_insurance %>% View()
 unique_marital_status %>% View()
 unique_religion %>% View()
 
+# Merge Unknow marital status
+admissions_clean <- admissions_clean %>%
+  mutate(
+    MARITAL_STATUS = case_when(
+      MARITAL_STATUS %in% c("UNKNOWN", "UNKNOWN (DEFAULT)") ~ "UNKNOWN",  # Merge these categories into "UNKNOWN"
+      TRUE ~ as.character(MARITAL_STATUS)  # Keep original values for all other cases
+    )
+  )
 # Create a new column for Ethnicity categories (White, Black, Asian)
 admissions_clean <- admissions_clean %>%
   mutate(
     ETHNICITY = case_when(
-      str_detect(ETHNICITY, "WHITE|MIDDLE EASTERN|AMERICAN INDIAN/ALASKA NATIVE|PORTUGUESE|CARIBBEAN ISLAND|HISPANIC|LATINO") ~ "WHITE",
+      str_detect(ETHNICITY, "WHITE|MIDDLE EASTERN|AMERICAN INDIAN|PORTUGUESE|CARIBBEAN|HISPANIC|LATINO") ~ "WHITE",
       str_detect(ETHNICITY, "BLACK|AFRICAN|CAPE VERDEAN|HAITIAN") ~ "BLACK",
       str_detect(ETHNICITY, "ASIAN") ~ "ASIAN",
-      ETHNICITY %in% c("UNKNOWN/NOT SPECIFIED", "UNABLE TO OBTAIN", "PATIENT DECLINED TO ANSWER", NA) ~ "UNKNOWN",
+      str_detect(ETHNICITY, "UNKNOWN|UNABLE TO OBTAIN|PATIENT DECLINED") ~ "UNKNOWN",  # Check for keywords
       TRUE ~ "OTHER" # For all other ethnicities
     ),
     ETHNICITY = as.factor(ETHNICITY)
@@ -96,9 +104,9 @@ admissions_clean <- admissions_clean %>%
     RELIGION = case_when(
       str_detect(RELIGION, "CATHOLIC|PROTESTANT|BAPTIST|METHODIST|7TH DAY ADVENTIST|UNITARIAN-UNIVERSALIST|EPISCOPALIAN|JEHOVAH|LUTHERAN|CHRISTIAN SCIENTIST|GREEK ORTHODOX|ROMANIAN EAST. ORTH") ~ "CHRISTIANITY",
       str_detect(RELIGION, "JEWISH|HEBREW") ~ "JUDAISM",
-      str_detect(RELIGION, "MUSLIM") ~ "ISLAM",
-      str_detect(RELIGION, "HINDU") ~ "HINDUISM",
-      str_detect(RELIGION, "BUDDHIST") ~ "BUDDHISM",
+      str_detect(RELIGION, "MUSLIM") ~ "OTHER",
+      str_detect(RELIGION, "HINDU") ~ "OTHER",
+      str_detect(RELIGION, "BUDDHIST") ~ "OTHER",
       RELIGION %in% c("OTHER") ~ "OTHER",
       RELIGION %in% c("UNKNOWN", "UNOBTAINABLE", "NOT SPECIFIED", NA) ~ "UNKNOWN",
       TRUE ~ "OTHER"
