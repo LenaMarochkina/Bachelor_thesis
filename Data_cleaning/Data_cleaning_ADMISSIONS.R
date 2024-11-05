@@ -27,7 +27,7 @@ admissions_clean <- admissions_clean %>%
   mutate(RELIGION = as.factor(replace_na(as.character(RELIGION), "UNKNOWN")),
          INSURANCE = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")),
          MARITAL_STATUS = as.factor(replace_na(as.character(MARITAL_STATUS), "UNKNOWN")),
-         ETHNICITY = as.factor(replace_na(as.character(INSURANCE), "UNKNOWN")))
+         ETHNICITY = as.factor(replace_na(as.character(ETHNICITY), "UNKNOWN")))
 
 # Change datetime format
 admissions_clean <-  admissions_clean %>%
