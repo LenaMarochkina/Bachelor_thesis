@@ -545,9 +545,52 @@ hr_table <- cox_model_summary("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADM
 
 # Display the hazard ratio table
 print(hr_table)
+
+# Fit the Cox model (if needed for predictors)
+cox_model_gender <- coxph(Surv(SURVIVAL, EXPIRE_FLAG) ~ GENDER, data = patients_admissions)
+
+# Generate Kaplan-Meier survival curve by GENDER
+fit_gender <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ GENDER, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_gender,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value for gender
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  legend.title = "Gender",
+  title = "Survival Curve by Gender",
+  palette =  color_palette
+)
+
+# Create age groups based on AGE_AT_ADMISSION
+patients_admissions <- patients_admissions %>%
+  mutate(
+    AGE_GROUP = cut(AGE_AT_ADMISSION,
+                    breaks = c(0, 18, 40, 60, 100), 
+                    labels = c("0-18", "19-40", "41-60", "61+"),
+                    right = FALSE)  # Include the left boundary in each group
+  )
+
+# Fit the Kaplan-Meier survival curve by age group
+fit_age_group <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ AGE_GROUP, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve for the age groups
+ggsurvplot(
+  fit_age_group,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value for age groups
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  legend.title = "Age Group",
+  title = "Survival Curve by Age Group",
+  palette = color_palette
+)
+
 ```
 
-**GENDER:** There is no statistically significant effect of gender on survival in your data. The p-value for gender is above the typical threshold of 0.05, and the confidence interval includes 1, indicating no strong evidence of an association.
+**GENDER:** There is no statistically significant effect of gender on survival in data. The p-value for gender is above the typical threshold of 0.05, and the confidence interval includes 1, indicating no strong evidence of an association.
 
 **AGE_AT_ADMISSION:** Age is a significant predictor of survival. The positive hazard ratio of 1.04 means that older patients are at a slightly higher risk of the event (death, etc.), and this result is statistically significant (p-value < 0.0001).
 
@@ -621,7 +664,6 @@ for (var in categorical_vars) {
 ```
 
 ## 3.4. Exploratory analysis
-
 ### 3.4.1. Outcome 1: Death Status by Patients Data
 
 ```{r}
@@ -629,7 +671,7 @@ for (var in categorical_vars) {
 result_ADMISSION_TYPE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
 result_INSURANCE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "INSURANCE", "INSURANCE")
 result_RELIGION <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "RELIGION", "RELIGION")
-result_MARITAL_STATUS <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "MARITAL_STATUS", "MARITAL_STATUS")
+result_MARITAL_STATUS <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "MARITAL_STATUS", "MARITAL STATUS")
 result_ETHNICITY <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ETHNICITY", "ETHNICITY")
 
 # Merge the results
