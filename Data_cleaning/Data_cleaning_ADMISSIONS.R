@@ -139,9 +139,6 @@ subject_death_check <- admissions_clean %>%
   filter(n_distinct(DEATHTIME) > 1) %>%  # Keep only SUBJECT_IDs with more than one distinct DEATHTIME
   arrange(SUBJECT_ID, DEATHTIME, DIAGNOSIS)
 
-# View results
-subject_death_check %>% View()
-
 # Check association with 2nd death time and diagnosis DONOR
 subject_is_donor <- subject_death_check %>%
   group_by(SUBJECT_ID) %>%
@@ -153,37 +150,32 @@ if (all(subject_is_donor$has_organ_donor_diagnosis)) {
   print("Not all patients with 2 death times were donors.")
 }
 
-# Create the TIMETODEATH variable in seconds for each unique SUBJECT_ID and HADM_ID
-admissions_with_timetodeath <- admissions_clean %>%
-  filter(!is.na(DEATHTIME)) %>%
-  arrange(SUBJECT_ID, HADM_ID, DEATHTIME) %>%
-  mutate(TIMETODEATH = as.numeric(difftime(DEATHTIME, ADMITTIME, units = "secs")),
-         # Check for negative TIMETODEATH and recalculate if necessary
-         TIMETODEATH = ifelse(TIMETODEATH < 0, as.numeric(difftime(ADMITTIME, DEATHTIME, units = "secs")), TIMETODEATH))
+# Create a list of SUBJECT_IDs that have more than one DEATHTIME
+subject_ids_with_multiple_deaths <- unique(subject_death_check$SUBJECT_ID)
 
-# View the result to ensure TIMETODEATH is correctly calculated
-summary(admissions_with_timetodeath$TIMETODEATH)
-
-# Ensure that each SUBJECT_ID and HADM_ID is unique in admissions_with_timetodeath
-admissions_with_timetodeath <- admissions_with_timetodeath %>%
-  distinct(SUBJECT_ID, HADM_ID, .keep_all = TRUE)
-
-# Perform left join using both SUBJECT_ID and HADM_ID as keys
+# Filter the original data to remove only the second (and later) DEATHTIME for these SUBJECT_IDs
 admissions_clean <- admissions_clean %>%
-  left_join(admissions_with_timetodeath %>% select(SUBJECT_ID, HADM_ID, TIMETODEATH), 
-            by = c("SUBJECT_ID", "HADM_ID"))
+  group_by(SUBJECT_ID) %>%
+  filter(
+    !(
+      SUBJECT_ID %in% subject_ids_with_multiple_deaths & 
+        DEATHTIME != min(DEATHTIME, na.rm = TRUE)
+    )
+  ) %>%
+  ungroup()
 
-# After the join, create acceptable_negative_timetodeath flag for negative TIMETODEATH
+# Create the SURVIVAL variable in days for each unique SUBJECT_ID and HADM_ID
 admissions_clean <- admissions_clean %>%
-  mutate(acceptable_negative_timetodeath = ifelse(TIMETODEATH < 0 & (EDREGTIME == EDOUTTIME | (is.na(EDREGTIME) & is.na(EDOUTTIME))), TRUE, NA))
-
-# Filter out rows with unacceptable negative TIMETODEATH values
-admissions_clean <- admissions_clean %>%
-  filter(is.na(acceptable_negative_timetodeath)) %>%
-  select(-acceptable_negative_timetodeath)  # Remove the flag column after filtering
-
-admissions_clean <- admissions_clean %>%
-  mutate(TIMETODEATH_DAYS = TIMETODEATH / (60 * 60 * 24))
+  arrange(SUBJECT_ID, HADM_ID) %>%
+  mutate(
+    SURVIVAL = ifelse(
+      !is.na(DEATHTIME),
+      as.numeric(difftime(DEATHTIME, ADMITTIME, units = "days")),
+      as.numeric(difftime(DISCHTIME, ADMITTIME, units = "days"))
+    ),
+    # Recalculate SURVIVAL if it's negative
+    SURVIVAL = ifelse(SURVIVAL < 0, abs(SURVIVAL), SURVIVAL)
+  )
 
 # Ensure no duplicates after merging
 admissions_clean <- admissions_clean %>%
@@ -191,7 +183,7 @@ admissions_clean <- admissions_clean %>%
 
 # Choose necessary columns after checking all data
 admissions_clean <- admissions_clean %>%
-  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, TIMETODEATH, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, TIMETODEATH_DAYS)
+  select(SUBJECT_ID, HADM_ID, ADMITTIME, DISCHTIME, DEATHTIME, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, SURVIVAL)
 
 # Write cleaned admissions to csv
 write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)
