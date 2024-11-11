@@ -6,14 +6,13 @@ output:
   html_document:
     toc: yes
     toc_depth: 4
-
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
 ```
 
-``` {r libraries, set colors}
+```{r libraries, set colors}
 library(tidyverse)
 library(readr)
 library(dplyr)
@@ -24,6 +23,9 @@ library(RColorBrewer)
 library(broom)
 library(tibble)
 library(nortest)
+library(survival)
+library(survminer)
+library(ggpubr)
 
 # Custom theme for visualisations
 theme_custom <- theme_minimal() +
@@ -43,7 +45,8 @@ theme_custom <- theme_minimal() +
 color_palette <- c(brewer.pal(9, "Pastel1"), brewer.pal(8, "Pastel2"))
 
 ```
-``` {r general functions}
+
+```{r Descriptive Stat functions}
 # Function to calculate 95% confidence interval for the mean
 ci_95 <- function(x) {
   n <- sum(!is.na(x))
@@ -68,6 +71,9 @@ statistics <- list(
   `_max` = ~ifelse(sum(!is.na(.x)) == 0, "NA", as.character(max(.x, na.rm = TRUE) %>% round(2)))
 )
 
+```
+
+``` {r Statictical hypothesis check}
 # Function to check statistical hypothesis (one-way criteria)
 perform_statistical_tests <- function(data, dependent_var, independent_var, variable_name) {
   result_table <- tibble(Variable = character(),
@@ -127,24 +133,75 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
   return(result_table)
 }
 
-
 ```
 
-# 1.    Outcomes Data
-## 1.1.   Read Data
+``` {r Survival Analysis}
+# General function to fit a Cox model and return hazard ratios, confidence intervals, and p-values
+cox_model_summary <- function(survival_time, event_status, predictors, data) {
+  # Create the formula for the Cox model
+  formula <- as.formula(paste("Surv(", survival_time, ", ", event_status, ") ~", paste(predictors, collapse = " + ")))
+  
+  # Fit the Cox model
+  cox_model <- coxph(formula, data = data)
+  
+  # Extract hazard ratios and confidence intervals
+  hr <- exp(coef(cox_model))  # Hazard ratios
+  hr_ci <- exp(confint(cox_model))  # Confidence intervals
+  
+  # Extract p-values
+  p_values <- summary(cox_model)$coefficients[, "Pr(>|z|)"]
+  
+  # Create a data frame with hazard ratios, confidence intervals, and p-values
+  hr_table <- data.frame(
+    Variable = predictors,
+    Hazard_Ratio = hr,
+    Lower_CI = hr_ci[, 1],
+    Upper_CI = hr_ci[, 2],
+    p_value = p_values
+  )
+  
+    # Format p-values
+  hr_table$p_value <- sapply(hr_table$p_value, function(p) {
+    if (p < 0.0001) {
+      return("< 0.0001")  # Handle very small p-values
+    } else {
+      return(formatC(p, format = "e", digits = 2))  # Format in scientific notation
+    }
+  })
+  
+  # Return the hazard ratio table
+  return(hr_table)
+}
+```
+
+# 1. Outcomes Data
+
+## 1.1. Read Data
 
 ```{r read files}
 patients <- read.csv("../data/raw/cleaned/PATIENTS_clean.csv", stringsAsFactors = TRUE) %>%
-  mutate(across(c(EXPIRE_FLAG), as.factor))
-admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE)
-icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE)
+  mutate(across(c(SUBJECT_ID, EXPIRE_FLAG), as.factor)) %>%
+  filter(AGE_AT_ADMISSION > 0)
 
+# Create a vector of SUBJECT_IDs where age > 0
+subject_ids_adults <- patients$SUBJECT_ID
+
+# Read the ADMISSIONS dataset and filter using the SUBJECT_ID vector
+admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE) %>%
+  filter(SUBJECT_ID %in% subject_ids_adults) %>% # Filter for adult patients 
+  mutate(across(c(SUBJECT_ID, HADM_ID), as.factor)) 
+
+# Read the ICUSTAYS dataset and filter using the SUBJECT_ID vector
+icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE) %>%
+  filter(SUBJECT_ID %in% subject_ids_adults) %>%  # Filter for adult patients
+  mutate(across(c(SUBJECT_ID, HADM_ID), as.factor)) 
 ```
 
-## 1.2.   Desriptive Statistics and Visualisation Analysis
-### 1.2.1.    Outcome 1: Death Status
+## 1.2. Desriptive Statistics and Visualisation Analysis
 
-``` {r descriptive statistics for death status}
+### 1.2.1. Outcome 1: Death Status
+
+```{r descriptive statistics for death status}
 patients %>%
   select(EXPIRE_FLAG) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
@@ -163,7 +220,7 @@ patients %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-``` {r barplot for death status}
+```{r barplot for death status}
 # Visualization for EXPIRE_FLAG in patients dataset
 ggplot(patients, aes(x = as.factor(EXPIRE_FLAG), fill = as.factor(EXPIRE_FLAG))) +
   geom_bar(color = "black") +
@@ -177,16 +234,25 @@ ggplot(patients, aes(x = as.factor(EXPIRE_FLAG), fill = as.factor(EXPIRE_FLAG)))
 
 ```
 
-- There were 30,761 patients who did not die (labeled "Not Dead").
-- There were 15,759 patients who died (labeled "Dead").
+-   There were 30,761 patients who did not die (labeled "Not Dead").
+-   There were 15,759 patients who died (labeled "Dead").
 
 This indicates that a higher proportion of patients in the dataset survived compared to those who did not. The ratio of surviving patients to deceased patients is approximately 2:1, which suggests that while mortality is significant, more patients survived than passed away during the period considered.
 
-### 1.2.2.    Outcome 2: Length of Survival
+### 1.2.2. Outcome 2: Length of Survival
 
 ```{r descriptive statistics for length of survival}
-admissions %>%
-  select(TIMETODEATH_DAYS) %>%
+# Create admissions_outcome file whith unique SUBJECT_ID and summarise SURVIVAL
+admissions_outcome <- admissions %>%
+  select(SURVIVAL,SUBJECT_ID) %>%
+  group_by(SUBJECT_ID) %>%
+  summarise(
+    SURVIVAL = sum(SURVIVAL, na.rm = TRUE)
+  ) %>%
+  ungroup()
+
+admissions_outcome %>%
+  select(SURVIVAL) %>%
   summarise(across(everything(), statistics)) %>%
   pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
   rename(`Value` = value) %>%
@@ -198,41 +264,9 @@ admissions %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-**Outliers Check**
-
-``` {r outliers check for length of survival}
-# Calculate mean and standard deviation
-mean_value <- mean(admissions$TIMETODEATH_DAYS, na.rm = TRUE)
-sd_value <- sd(admissions$TIMETODEATH_DAYS, na.rm = TRUE)
-
-# Define the 3-sigma range
-lower_bound <- mean_value - 3 * sd_value
-upper_bound <- mean_value + 3 * sd_value
-
-# Identify outliers
-outliers <- admissions %>%
-  filter(TIMETODEATH_DAYS < lower_bound | TIMETODEATH_DAYS > upper_bound)
-
-# Calculate the number and percentage of outliers
-num_outliers <- nrow(outliers)
-total_values <- nrow(admissions)
-percent_outliers <- (num_outliers / total_values) * 100
-
-# Print the number and percentage of outliers
-cat("Number of outliers:", num_outliers, "\n")
-cat("Percentage of outliers:", round(percent_outliers, 2), "%\n")
-
-# Filter out the outliers
-admissions_outcome <- admissions %>%
-  select(TIMETODEATH_DAYS,TIMETODEATH, SUBJECT_ID, HADM_ID) %>%
-  filter(TIMETODEATH_DAYS >= lower_bound & TIMETODEATH_DAYS <= upper_bound)
-```
-
-Based on the small percentage of outliers observed, it was decided to filter them out. These outliers could potentially represent patients who were in a prolonged coma or had unusually extended hospital stays.
-
-``` {r boxplot for length of survival}
+```{r boxplot for length of survival}
 # Boxplot for TIMETODEATH
-ggplot(admissions_outcome, aes(y = TIMETODEATH_DAYS)) +
+ggplot(admissions_outcome, aes(y = SURVIVAL)) +
   geom_boxplot(fill = color_palette[4], color = "black") +
   labs(title = "Boxplot of Time to Death (in Days)",
        y = "Time to Death (in days)") +
@@ -240,8 +274,8 @@ ggplot(admissions_outcome, aes(y = TIMETODEATH_DAYS)) +
 
 ```
 
-``` {r density plot for length of survival}
-ggplot(admissions_outcome, aes(x = TIMETODEATH_DAYS)) +
+```{r density plot for length of survival}
+ggplot(admissions_outcome, aes(x = SURVIVAL)) +
   geom_density(fill = color_palette[14], alpha = 0.7) +
   labs(title = "Density Plot of Time to Death (in Days)",
        x = "Time to Death (in days)",
@@ -251,9 +285,10 @@ ggplot(admissions_outcome, aes(x = TIMETODEATH_DAYS)) +
 
 The boxplot and density plot show that most patients died within 0 to 30 days, with a median around 10 days. There are still several outliers, indicating some patients survived much longer, possibly due to unique conditions such as prolonged illness or coma.
 
-### 1.2.3.    Outcome 3: Length of ICU Stay
+### 1.2.3. Outcome 3: Length of ICU Stay
 
 ```{r descriptive statistics for length of ICU stay}
+
 icu_stays %>%
   select(LOS) %>%
   summarise(across(everything(), statistics)) %>%
@@ -269,7 +304,7 @@ icu_stays %>%
 
 **Check for outliers**
 
-``` {r check for outliers for length of ICU stay}
+```{r check for outliers for length of ICU stay}
 # Calculate mean and standard deviation for LOS variable
 mean_los <- mean(icu_stays$LOS, na.rm = TRUE)
 sd_los <- sd(icu_stays$LOS, na.rm = TRUE)
@@ -300,7 +335,7 @@ icu_stays$outlier_los <- NULL
 
 Based on the relatively small percentage of outliers (1.95%), it was decided to filter them out from the icu_stays dataset. This filtering helps ensure a more robust analysis by excluding extreme cases that could disproportionately impact the results. It's worth noting that some of these outliers could represent unique cases, such as patients in a coma or those with extended ICU stays due to complex medical conditions.
 
-``` {r violin plot for length of ICU stay}
+```{r violin plot for length of ICU stay}
 ggplot(icu_stays_outcome, aes(x = "", y = LOS)) +
   geom_violin(fill = color_palette[10], color = "black") +
   geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
@@ -313,8 +348,9 @@ ggplot(icu_stays_outcome, aes(x = "", y = LOS)) +
 
 This plot highlights that most patients had shorter ICU stays, but there are a few cases with extended durations that could represent unique medical conditions or complications.
 
-# 2.    Patients Data
-## 2.1.   Read and Prepare Data
+# 2. Patients Data
+
+## 2.1. Read and Prepare Data
 
 ```{r read file patients}
 patients <- patients %>%
@@ -326,8 +362,9 @@ patients <- patients %>%
 skimr::skim(patients)
 ```
 
-## 2.2.   Desriptive statistics
-### 2.2.1.    Descriptive statistics for numerical variables
+## 2.2. Desriptive statistics
+
+### 2.2.1. Descriptive statistics for numerical variables
 
 ```{r descriptive statistics for numerical vars}
 # Summarize the statistics for each numeric variable
@@ -345,9 +382,9 @@ patients %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-### 2.2.2.    Descriptive statistics for categorical variables
+### 2.2.2. Descriptive statistics for categorical variables
 
-``` {r}
+```{r}
 # Clean and summarize the categorical data for all factor variables
 patients %>%
   select(-DOB, -DOD) %>%
@@ -368,10 +405,11 @@ patients %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-## 2.3.   Visualisation Analysis by Outcome
-### 2.3.1.    Outcome 1: Death Status by Patients Data
+## 2.3. Visualisation Analysis by Outcome
 
-``` {r death status by gender}
+### 2.3.1. Outcome 1: Death Status by Patients Data
+
+```{r death status by gender}
 ggplot(patients, aes(x = GENDER, fill = EXPIRE_FLAG)) +
   geom_bar(position = position_dodge2(width = 0.9), color = "black") +
   geom_text(stat = 'count', aes(label = after_stat(count)), position = position_dodge2(width = 0.9), vjust = -0.5) +
@@ -380,28 +418,44 @@ ggplot(patients, aes(x = GENDER, fill = EXPIRE_FLAG)) +
   theme_custom
 ```
 
+-   Males (M) have a higher count in both survival (17,597) and death (8,524) categories compared to females.
+-   Females (F) have a lower count, with 13,164 surviving and 7,235 deceased.
 
-- Males (M) have a higher count in both survival (17,597) and death (8,524) categories compared to females.
-- Females (F) have a lower count, with 13,164 surviving and 7,235 deceased.
-
-This suggests that while the total number of male patients is higher, the proportion of deceased individuals appears similar across genders. 
+This suggests that while the total number of male patients is higher, the proportion of deceased individuals appears similar across genders.
 
 ```{r death status by age at admission}
 ggplot(patients, aes(x = AGE_AT_ADMISSION, fill = EXPIRE_FLAG)) +
   geom_histogram(binwidth = 5, alpha = 0.7, position = "identity", color = "black") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG))), labels = c("0" = "Not Dead", "1" = "Dead")) +
   labs(title = "Death Status by Age at Admission", 
        x = "Age at Admission", 
        y = "Count", 
        fill = "Death Status") +
   theme_custom
+
 ```
 
-- High Frequency in Infants (Age 0): There is a significant spike in the number of admissions at age 0, with the vast majority being alive. 
-- Increasing Death Rate with Age: The number of deaths increases as age at admission increases, particularly noticeable in older age groups (60+ years). This suggests a higher mortality rate with increasing age.
-- Peak in Midlife and Elderly: The number of admissions peaks around middle age (45–65) with a higher number of surviving patients but a noticeable increase in death cases as age progresses.
+-   Increasing Death Rate with Age: The number of deaths increases as age at admission increases, particularly noticeable in older age groups (60+ years). This suggests a higher mortality rate with increasing age.
+-   Peak in Midlife and Elderly: The number of admissions peaks around middle age (45–65) with a higher number of surviving patients but a noticeable increase in death cases as age progresses.
 
-### 2.3.2.    Outcome 2: Length of Survival by Patients Data
+During the exploratory data analysis, a significant spike in admissions for newborns (age 0) was observed, with the vast majority of these infants being alive. After careful consideration, it was decided to exclude the data for newborns (age 0) from our analysis.
+
+**Rationale for Removal:**
+1. Different Health Dynamics in Newborns
+
+Newborns (age 0) have distinct health characteristics and mortality patterns compared to older children and adults. Their admissions are often related to birth-related complications, immediate post-birth care, or congenital conditions. These factors may not be directly relevant to the survival analysis intended for the rest of the population.
+The survival dynamics for newborns are very different from those for older children or adults, making it difficult to generalize survival factors across the age spectrum when newborns are included.
+
+2. Survival Bias in Newborns
+
+The vast majority of newborns survive, which introduces a potential survival bias into the analysis. Since survival outcomes for newborns are typically skewed toward "alive" (due to medical advances in neonatal care), their inclusion could dilute the significance of other age groups and make it harder to detect meaningful survival trends.
+Including newborns could potentially lead to misleading conclusions about the effect of age on survival outcomes, as the survival rate for age 0 is much higher compared to other age groups, thus overshadowing the variability observed in older patients.
+Distortion of Survival Model Results:
+
+The presence of a large proportion of patients who survive (newborns) can distort the results of a survival analysis. If survival outcomes for newborns (age 0) are predominantly "alive," they can skew the overall survival curve, potentially masking or distorting the real relationship between age and survival in older populations.
+By excluding newborns, we ensure that the survival analysis reflects more accurate and relevant survival patterns across the broader population, without the confounding effect of newborn health outcomes.
+
+### 2.3.2. Outcome 2: Length of Survival by Patients Data
 
 ```{r length of survival by age and gender}
 # Merge admissions with patients data to include AGE_AT_ADMISSION
@@ -419,7 +473,7 @@ admissions_patients <- admissions_patients %>%
                             labels = age_labels))
 
 # Plot including age quintiles as facets
-ggplot(admissions_patients, aes(x = GENDER, y = TIMETODEATH_DAYS, fill = GENDER)) +
+ggplot(admissions_patients, aes(x = GENDER, y = SURVIVAL, fill = GENDER)) +
   geom_boxplot() +
   facet_wrap(~ AGE_QUINTILE, ncol = 3) +  # Facet by age quintiles
   labs(title = "Length of Survival by Gender and Age Quintile",
@@ -431,7 +485,7 @@ ggplot(admissions_patients, aes(x = GENDER, y = TIMETODEATH_DAYS, fill = GENDER)
 
 The plot allows for the visualization of how gender and age interact to influence survival times. It suggests that older females tend to have longer survival times than older males, but there are significant outliers in each group. The presence of NA age values indicates patients whose age could not be determined.
 
-### 2.3.3.    Outcome 3: Length of ICU Stay by Patients Data
+### 2.3.3. Outcome 3: Length of ICU Stay by Patients Data
 
 ```{r length of ICU stay by gender and age}
 # Merge icu_stays with patients data to include AGE_AT_ADMISSION
@@ -461,10 +515,11 @@ ggplot(combined_data_los, aes(x = GENDER, y = LOS, fill = GENDER)) +
 
 Overall, this boxplot provides valuable insights into how gender and age influence the length of ICU stays, indicating that females may generally experience longer stays than males across the age spectrum, while patients with missing age data may represent a different patient population.
 
-## 2.4.   Exploratory analysis
-### 2.4.1.    Outcome 1: Death Status by Patients Data
+## 2.4. Exploratory analysis
 
-``` {r}
+### 2.4.1. Outcome 1: Death Status by Patients Data
+
+```{r Death Status by Patients Data Exploratory analysis}
 # Perform the statistical tests for both variables
 result_age <- perform_statistical_tests(patients, "EXPIRE_FLAG", "AGE_AT_ADMISSION", "Age")
 result_sex <- perform_statistical_tests(patients, "EXPIRE_FLAG", "GENDER", "Gender")
@@ -474,24 +529,41 @@ merged_results <- bind_rows(result_age, result_sex)
 print(merged_results)
 ```
 
-# 3.    Admissions Data
-## 3.1.   Read and Prepare Data
+Both **Age and Gender** show highly significant associations with death status (EXPIRE_FLAG), suggesting they are both important variables in explaining survival outcomes in this dataset.
 
-```{r read file}
-admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE) %>%
+### 2.4.2. Outcome 2: Length of Survival by Patients Data
+
+```{r Length of Survival by Patients DataExploratory analysis}
+patients_admissions <- patients %>%
+  left_join(admissions_outcome, by = "SUBJECT_ID") %>%
+  select(SUBJECT_ID, SURVIVAL, EXPIRE_FLAG, AGE_AT_ADMISSION, GENDER) %>%
   mutate(
-    ADMITTIME = as.POSIXct(ADMITTIME, format = "%Y-%m-%d %H:%M:%S"),
-    DISCHTIME = as.POSIXct(ADMITTIME, format = "%Y-%m-%d %H:%M:%S"),
-    DEATHTIME = as.POSIXct(DEATHTIME, format = "%Y-%m-%d %H:%M:%S")
+    EXPIRE_FLAG = as.numeric(as.character(EXPIRE_FLAG))  # Ensure EXPIRE_FLAG is numeric
   )
 
+hr_table <- cox_model_summary("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_admissions)
+
+# Display the hazard ratio table
+print(hr_table)
+```
+
+**GENDER:** There is no statistically significant effect of gender on survival in your data. The p-value for gender is above the typical threshold of 0.05, and the confidence interval includes 1, indicating no strong evidence of an association.
+
+**AGE_AT_ADMISSION:** Age is a significant predictor of survival. The positive hazard ratio of 1.04 means that older patients are at a slightly higher risk of the event (death, etc.), and this result is statistically significant (p-value < 0.0001).
+
+# 3. Admissions Data
+
+## 3.1. Read and Prepare Data
+
+```{r read file}
 skimr::skim(admissions)
 ```
 
-## 3.2.   Desriptive statistics
-### 3.2.1.    Descriptive statistics for categorical variables
+## 3.2. Desriptive statistics
 
-``` {r}
+### 3.2.1. Descriptive statistics for categorical variables
+
+```{r}
 # Clean and summarize the categorical data for all factor variables
 admissions %>%
   select(ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
@@ -512,10 +584,11 @@ admissions %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-## 3.3.   Visualisation Analysis by Outcome
-### 3.3.1.    Outcome 1: Death Status by Admissions Data
+## 3.3. Visualisation Analysis by Outcome
 
-``` {r death status by admissions data}
+### 3.3.1. Outcome 1: Death Status by Admissions Data
+
+```{r death status by admissions data}
 patients_admissions <- patients %>%
   left_join(admissions, by = "SUBJECT_ID")
 
@@ -547,10 +620,11 @@ for (var in categorical_vars) {
 }
 ```
 
-## 3.4.   Exploratory analysis
-### 3.4.1.    Outcome 1: Death Status by Patients Data
+## 3.4. Exploratory analysis
 
-``` {r}
+### 3.4.1. Outcome 1: Death Status by Patients Data
+
+```{r}
 # Perform the statistical tests for both variables
 result_ADMISSION_TYPE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
 result_INSURANCE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "INSURANCE", "INSURANCE")
