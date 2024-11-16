@@ -10,6 +10,7 @@ output:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
+
 ```
 
 ```{r libraries, set colors}
@@ -26,6 +27,9 @@ library(nortest)
 library(survival)
 library(survminer)
 library(ggpubr)
+library(lme4)   
+library(lmerTest) 
+
 
 # Custom theme for visualisations
 theme_custom <- theme_minimal() +
@@ -80,6 +84,15 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
                          Result = character(),
                          Interpretation = character())
   
+  # Format p-value helper function
+  format_p_value <- function(p) {
+    if (p < 0.0001) {
+      return("< 0.0001")  # Very small p-values
+    } else {
+      return(formatC(p, format = "f", digits = 4))  # Standard decimal notation
+    }
+  }
+  
   # Check the type of independent variable
   if (is.numeric(data[[independent_var]])) {
     # If independent variable is numeric
@@ -93,7 +106,7 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
           add_row(
             Variable = variable_name,
             Performed_test = "T-Test",
-            Result = format.pval(t_test_result$p.value, digits = 2, scientific = TRUE),
+            Result = format_p_value(t_test_result$p.value),
             Interpretation = ifelse(t_test_result$p.value < 0.05, "Significant", "Not significant")
           )
       } else {
@@ -104,7 +117,7 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
             add_row(
               Variable = variable_name,
               Performed_test = "Mann-Whitney U Test",
-              Result = format.pval(mw_test_result$p.value, digits = 2, scientific = TRUE),
+              Result = format_p_value(mw_test_result$p.value),
               Interpretation = ifelse(mw_test_result$p.value < 0.05, "Significant", "Not significant")
             )
         } else {
@@ -125,7 +138,7 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
         add_row(
           Variable = variable_name,
           Performed_test = "Chi-Squared Test",
-          Result = format.pval(chi_square_result$p.value, digits = 2, scientific = TRUE),
+          Result = format_p_value(chi_square_result$p.value),
           Interpretation = ifelse(chi_square_result$p.value < 0.05, "Significant", "Not significant")
         )
     } else {
@@ -142,10 +155,12 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
   return(result_table)
 }
 
+
 ```
 
 ``` {r Survival Analysis}
 HR_assessment <- function(survival_time, event_status, predictors, data) {
+  
   # Create the formula for the Cox model
   formula <- as.formula(paste("Surv(", survival_time, ", ", event_status, ") ~", paste(predictors, collapse = " + ")))
   
@@ -159,36 +174,41 @@ HR_assessment <- function(survival_time, event_status, predictors, data) {
   # Extract p-values
   p_values <- summary(cox_model)$coefficients[, "Pr(>|z|)"]
   
-  # Create a data frame with hazard ratios, confidence intervals, and p-values
-  hr_table <- data.frame(
+  # Format p-values helper function
+  format_p_value <- function(p) {
+    if (p < 0.0001) {
+      return("< 0.0001")  # Very small p-values
+    } else {
+      return(formatC(p, format = "f", digits = 4))  # Standard decimal notation
+    }
+  }
+  
+  # Create a tibble with hazard ratios, confidence intervals, and p-values
+  hr_table <- tibble(
     Variable = predictors,
     Hazard_Ratio = hr,
     Lower_CI = hr_ci[, 1],
     Upper_CI = hr_ci[, 2],
-    p_value = p_values
+    p_value = sapply(p_values, format_p_value)  # Apply p-value formatting
   )
-  
-  # Format p-values
-  hr_table$p_value <- sapply(hr_table$p_value, function(p) {
-    if (p < 0.0001) {
-      return("< 0.0001")  # Handle very small p-values
-    } else {
-      return(formatC(p, format = "e", digits = 2))  # Format in scientific notation
-    }
-  })
   
   # Return the hazard ratio table
   return(hr_table)
 }
+
 ```
 
 ``` {r LOS Analysis}
 analyze_predictor_LOS <- function(data, predictor, LOS, patient_id) {
-  # Load necessary libraries
-  library(lme4)       # For mixed-effects modeling
-  library(lmerTest)   # For p-values in mixed-effects models
-  library(dplyr)      # For data manipulation
-  library(broom.mixed)  # For tidying mixed-effects models
+  
+  # Helper function to format p-values
+  format_p_value <- function(p) {
+    if (p < 0.0001) {
+      return("< 0.0001")  # Very small p-values
+    } else {
+      return(formatC(p, format = "f", digits = 4))  # Standard decimal notation with 4 digits
+    }
+  }
 
   # Validate Inputs
   if (!(predictor %in% colnames(data))) {
@@ -213,11 +233,11 @@ analyze_predictor_LOS <- function(data, predictor, LOS, patient_id) {
     model_summary <- summary(model)
 
     # Extract fixed-effect estimate and p-value
-    fixed_effects <- data.frame(
+    fixed_effects <- tibble(
       Variable = predictor,
       Performed_test = "Mixed-Effects Linear Model",
       Statistic = model_summary$coefficients[predictor, "Estimate"],
-      P_value = model_summary$coefficients[predictor, "Pr(>|t|)"],
+      P_value = format_p_value(model_summary$coefficients[predictor, "Pr(>|t|)"]),
       Interpretation = ifelse(model_summary$coefficients[predictor, "Pr(>|t|)"] < 0.05, "Significant", "Not Significant")
     )
 
@@ -235,19 +255,21 @@ analyze_predictor_LOS <- function(data, predictor, LOS, patient_id) {
         Variable = predictor,
         Performed_test = "Mixed-Effects Linear Model",
         Statistic = Estimate,
-        P_value = `Pr(>|t|)`,
+        P_value = sapply(`Pr(>|t|)`, format_p_value),
         Interpretation = ifelse(`Pr(>|t|)` < 0.05, "Significant", "Not Significant")
       ) %>%
-      select(Variable, Term, Performed_test, Statistic, P_value, Interpretation)
+      select(Variable, Term, Performed_test, Statistic, P_value, Interpretation) %>%
+      as_tibble()  # Convert to tibble
   } else {
     stop("Error: Predictor must be numeric, factor, or character.")
   }
 
-  # Return the result table
+  # Return the result table as a tibble
   return(fixed_effects)
 }
 
 ```
+
 
 # 1. Outcomes Data
 
@@ -338,6 +360,37 @@ admissions_outcome %>%
   border_inner(border = fp_border(color = "black", width = 1)) %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
+
+**Outliers Check**
+
+``` {r outliers check for length of survival}
+# Calculate mean and standard deviation
+mean_value <- mean(admissions_outcome$SURVIVAL, na.rm = TRUE)
+sd_value <- sd(admissions_outcome$SURVIVAL, na.rm = TRUE)
+
+# Define the 3-sigma range
+lower_bound <- mean_value - 3 * sd_value
+upper_bound <- mean_value + 3 * sd_value
+
+# Identify outliers
+outliers <- admissions_outcome %>%
+  filter(SURVIVAL < lower_bound | SURVIVAL > upper_bound)
+
+# Calculate the number and percentage of outliers
+num_outliers <- nrow(outliers)
+total_values <- nrow(admissions_outcome)
+percent_outliers <- (num_outliers / total_values) * 100
+
+# Print the number and percentage of outliers
+cat("Number of outliers:", num_outliers, "\n")
+cat("Percentage of outliers:", round(percent_outliers, 2), "%\n")
+
+# Filter out the outliers
+admissions_outcome <- admissions_outcome %>%
+  filter(SURVIVAL >= lower_bound & SURVIVAL <= upper_bound)
+```
+
+Based on the small percentage of outliers observed, it was decided to filter them out. These outliers could potentially represent patients who were in a prolonged coma or had unusually extended hospital stays.
 
 ```{r boxplot for length of survival}
 # Boxplot for TIMETODEATH
@@ -459,10 +512,10 @@ patients %>%
 
 ### 2.2.2. Descriptive statistics for categorical variables
 
-```{r}
+```{r Descriptive statistics patients for categorical vars}
 # Clean and summarize the categorical data for all factor variables
 patients %>%
-  select(-DOB, -DOD) %>%
+  select(-DOB, -DOD, -SUBJECT_ID) %>%
   select(where(is.factor)) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
   group_by(Variable, Value) %>%
@@ -556,6 +609,23 @@ ggplot(admissions_patients, aes(x = GENDER, y = SURVIVAL, fill = GENDER)) +
        y = "Time to Death (Days)") +
   scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
   theme_custom
+
+ggplot(admissions_patients, aes(x = SURVIVAL, y = as.factor(AGE_QUINTILE), fill = GENDER, color = GENDER)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  facet_wrap(~GENDER, scales = "free_y") +
+  theme_custom +
+ scale_fill_manual(values = color_palette) +  # Color for boxplot fill
+  scale_color_manual(values = color_palette) + # Color for jitter points
+  labs(
+    title = "Time to Death by Age Quintile for Males and Females",
+    y = "Time to Death (Days)", x = "Age Quintile"
+  ) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
 ```
 
 The plot allows for the visualization of how gender and age interact to influence survival times. It suggests that older females tend to have longer survival times than older males, but there are significant outliers in each group. The presence of NA age values indicates patients whose age could not be determined.
@@ -601,6 +671,7 @@ result_sex <- perform_statistical_tests(patients, "EXPIRE_FLAG", "GENDER", "Gend
 
 # Merge the results
 merged_results <- bind_rows(result_age, result_sex)
+
 print(merged_results)
 ```
 
@@ -658,8 +729,8 @@ ggsurvplot(
 
 hr_table <- HR_assessment("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_admissions)
 
-# Display the hazard ratio table
-print(hr_table)
+print(merged_results)
+
 ```
 
 **GENDER:** There is no statistically significant effect of gender on survival in data. The p-value for gender is above the typical threshold of 0.05, and the confidence interval includes 1, indicating no strong evidence of an association.
@@ -691,7 +762,7 @@ skimr::skim(admissions)
 
 ### 3.2.1. Descriptive statistics for categorical variables
 
-```{r}
+```{r descriptive statistica admissions}
 # Clean and summarize the categorical data for all factor variables
 admissions %>%
   select(ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
@@ -718,8 +789,8 @@ admissions %>%
 
 ```{r death status by admissions data}
 patients_admissions <- patients %>%
-  left_join(admissions, by = "SUBJECT_ID") %>%
-  
+  left_join(admissions, by = "SUBJECT_ID")
+
 
 # Prepare the data for plotting
 patients_admissions_long <- patients_admissions %>%
@@ -747,14 +818,21 @@ for (var in categorical_vars) {
   # Print or save the plot
   print(p)
 }
+
 ```
 
-## 3.4. Exploratory analysis
-### 3.4.1. Outcome 1: Death Status by Patients Data
+### 3.3.2. Outcome 2: Length of Survival by Admissions Data
 
-```{r}
+### 3.3.3. Outcome 3: Length of ICU Stay by Admissions Data
+
+
+## 3.4. Exploratory analysis
+### 3.4.1. Outcome 1: Death Status by Admissions Data
+
+```{r Death Status by Admissions Data }
 # Perform the statistical tests for both variables
 patients_admissions$ADMISSION_TYPE <- droplevels(patients_admissions$ADMISSION_TYPE)
+
 result_ADMISSION_TYPE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
 result_INSURANCE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "INSURANCE", "INSURANCE")
 result_RELIGION <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "RELIGION", "RELIGION")
@@ -763,8 +841,7 @@ result_ETHNICITY <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG"
 
 # Merge the results
 merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
+
 print(merged_results)
-
-
 
 ```
