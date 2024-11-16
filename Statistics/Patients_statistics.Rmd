@@ -74,7 +74,6 @@ statistics <- list(
 ```
 
 ``` {r Statictical hypothesis check}
-# Function to check statistical hypothesis (one-way criteria)
 perform_statistical_tests <- function(data, dependent_var, independent_var, variable_name) {
   result_table <- tibble(Variable = character(),
                          Performed_test = character(),
@@ -84,41 +83,44 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
   # Check the type of independent variable
   if (is.numeric(data[[independent_var]])) {
     # If independent variable is numeric
-    
-    # Anderson-Darling test for normality
-    ad_result <- nortest::ad.test(data[[independent_var]][!is.na(data[[independent_var]])])
-    
-    if (ad_result$p.value > 0.05) {
-      # Normal distribution
-      t_test_result <- t.test(data[[independent_var]] ~ data[[dependent_var]], data = data)
-      result_table <- result_table %>%
-        add_row(
-          Variable = variable_name,
-          Performed_test = "T-Test",
-          Result = format.pval(t_test_result$p.value, digits = 2, scientific = TRUE),
-          Interpretation = ifelse(t_test_result$p.value < 0.05, "Significant", "Not significant")
-        )
+    if (length(data[[independent_var]][!is.na(data[[independent_var]])]) > 3) {
+      ad_result <- nortest::ad.test(data[[independent_var]][!is.na(data[[independent_var]])])
+      
+      if (ad_result$p.value > 0.05) {
+        # Normal distribution
+        t_test_result <- t.test(data[[independent_var]] ~ as.factor(data[[dependent_var]]), data = data)
+        result_table <- result_table %>%
+          add_row(
+            Variable = variable_name,
+            Performed_test = "T-Test",
+            Result = format.pval(t_test_result$p.value, digits = 2, scientific = TRUE),
+            Interpretation = ifelse(t_test_result$p.value < 0.05, "Significant", "Not significant")
+          )
+      } else {
+        # Not normally distributed
+        if (length(unique(data[[dependent_var]])) == 2) {
+          mw_test_result <- wilcox.test(data[[independent_var]] ~ as.factor(data[[dependent_var]]), data = data)
+          result_table <- result_table %>%
+            add_row(
+              Variable = variable_name,
+              Performed_test = "Mann-Whitney U Test",
+              Result = format.pval(mw_test_result$p.value, digits = 2, scientific = TRUE),
+              Interpretation = ifelse(mw_test_result$p.value < 0.05, "Significant", "Not significant")
+            )
+        } else {
+          stop("Dependent variable must have exactly two levels for Mann-Whitney U Test.")
+        }
+      }
     } else {
-      # Not normally distributed
-      mw_test_result <- wilcox.test(data[[independent_var]] ~ data[[dependent_var]], data = data)
-      result_table <- result_table %>%
-        add_row(
-          Variable = variable_name,
-          Performed_test = "Mann-Whitney U Test",
-          Result = format.pval(mw_test_result$p.value, digits = 2, scientific = TRUE),
-          Interpretation = ifelse(mw_test_result$p.value < 0.05, "Significant", "Not significant")
-        )
+      stop("Not enough data points for Anderson-Darling test.")
     }
     
   } else if (is.factor(data[[independent_var]]) || is.character(data[[independent_var]])) {
     # If independent variable is categorical
-    
-    # Create a contingency table
+    data[[dependent_var]] <- as.factor(data[[dependent_var]])
     contingency_table <- table(data[[independent_var]], data[[dependent_var]])
-    
-
-      # Use Chi-squared test
-      chi_square_result <- chisq.test(contingency_table)
+    if (all(contingency_table > 0)) {
+      chi_square_result <- chisq.test(contingency_table, simulate.p.value = TRUE)
       result_table <- result_table %>%
         add_row(
           Variable = variable_name,
@@ -126,8 +128,15 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
           Result = format.pval(chi_square_result$p.value, digits = 2, scientific = TRUE),
           Interpretation = ifelse(chi_square_result$p.value < 0.05, "Significant", "Not significant")
         )
+    } else {
+      stop("Contingency table contains zero counts. Consider merging categories.")
+    }
   } else {
     stop("Independent variable must be either numeric or categorical.")
+  }
+  
+  if (nrow(result_table) == 0) {
+    stop("No valid tests were performed. Check your data and variables.")
   }
   
   return(result_table)
@@ -136,8 +145,7 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
 ```
 
 ``` {r Survival Analysis}
-# General function to fit a Cox model and return hazard ratios, confidence intervals, and p-values
-cox_model_summary <- function(survival_time, event_status, predictors, data) {
+HR_assessment <- function(survival_time, event_status, predictors, data) {
   # Create the formula for the Cox model
   formula <- as.formula(paste("Surv(", survival_time, ", ", event_status, ") ~", paste(predictors, collapse = " + ")))
   
@@ -160,7 +168,7 @@ cox_model_summary <- function(survival_time, event_status, predictors, data) {
     p_value = p_values
   )
   
-    # Format p-values
+  # Format p-values
   hr_table$p_value <- sapply(hr_table$p_value, function(p) {
     if (p < 0.0001) {
       return("< 0.0001")  # Handle very small p-values
@@ -172,6 +180,73 @@ cox_model_summary <- function(survival_time, event_status, predictors, data) {
   # Return the hazard ratio table
   return(hr_table)
 }
+```
+
+``` {r LOS Analysis}
+analyze_predictor_LOS <- function(data, predictor, LOS, patient_id) {
+  # Load necessary libraries
+  library(lme4)       # For mixed-effects modeling
+  library(lmerTest)   # For p-values in mixed-effects models
+  library(dplyr)      # For data manipulation
+  library(broom.mixed)  # For tidying mixed-effects models
+
+  # Validate Inputs
+  if (!(predictor %in% colnames(data))) {
+    stop(paste("Error: Predictor column", predictor, "does not exist in the dataset."))
+  }
+  if (!(LOS %in% colnames(data))) {
+    stop(paste("Error: LOS column", LOS, "does not exist in the dataset."))
+  }
+  if (!(patient_id %in% colnames(data))) {
+    stop(paste("Error: Patient ID column", patient_id, "does not exist in the dataset."))
+  }
+
+  # Check if LOS is numeric
+  if (!is.numeric(data[[LOS]])) {
+    stop("Error: LOS column must be numeric.")
+  }
+
+  # Check predictor type
+  if (is.numeric(data[[predictor]])) {
+    # Numerical predictor: Fit a mixed-effects linear regression model
+    model <- lmer(as.formula(paste(LOS, "~", predictor, "+ (1 |", patient_id, ")")), data = data)
+    model_summary <- summary(model)
+
+    # Extract fixed-effect estimate and p-value
+    fixed_effects <- data.frame(
+      Variable = predictor,
+      Performed_test = "Mixed-Effects Linear Model",
+      Statistic = model_summary$coefficients[predictor, "Estimate"],
+      P_value = model_summary$coefficients[predictor, "Pr(>|t|)"],
+      Interpretation = ifelse(model_summary$coefficients[predictor, "Pr(>|t|)"] < 0.05, "Significant", "Not Significant")
+    )
+
+  } else if (is.factor(data[[predictor]]) || is.character(data[[predictor]])) {
+    # Categorical predictor: Fit a mixed-effects linear regression model
+    data[[predictor]] <- as.factor(data[[predictor]])  # Ensure it's a factor
+    model <- lmer(as.formula(paste(LOS, "~", predictor, "+ (1 |", patient_id, ")")), data = data)
+    model_summary <- summary(model)
+
+    # Extract fixed-effect estimates and p-values for all levels of the categorical predictor
+    fixed_effects <- as.data.frame(model_summary$coefficients) %>%
+      rownames_to_column("Term") %>%
+      filter(Term != "(Intercept)") %>%
+      mutate(
+        Variable = predictor,
+        Performed_test = "Mixed-Effects Linear Model",
+        Statistic = Estimate,
+        P_value = `Pr(>|t|)`,
+        Interpretation = ifelse(`Pr(>|t|)` < 0.05, "Significant", "Not Significant")
+      ) %>%
+      select(Variable, Term, Performed_test, Statistic, P_value, Interpretation)
+  } else {
+    stop("Error: Predictor must be numeric, factor, or character.")
+  }
+
+  # Return the result table
+  return(fixed_effects)
+}
+
 ```
 
 # 1. Outcomes Data
@@ -541,14 +616,6 @@ patients_admissions <- patients %>%
     EXPIRE_FLAG = as.numeric(as.character(EXPIRE_FLAG))  # Ensure EXPIRE_FLAG is numeric
   )
 
-hr_table <- cox_model_summary("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_admissions)
-
-# Display the hazard ratio table
-print(hr_table)
-
-# Fit the Cox model (if needed for predictors)
-cox_model_gender <- coxph(Surv(SURVIVAL, EXPIRE_FLAG) ~ GENDER, data = patients_admissions)
-
 # Generate Kaplan-Meier survival curve by GENDER
 fit_gender <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ GENDER, data = patients_admissions)
 
@@ -583,16 +650,34 @@ ggsurvplot(
   pval = TRUE,  # Display p-value for age groups
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
+  surv.median.line = "hv",
   legend.title = "Age Group",
   title = "Survival Curve by Age Group",
   palette = color_palette
 )
 
+hr_table <- HR_assessment("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_admissions)
+
+# Display the hazard ratio table
+print(hr_table)
 ```
 
 **GENDER:** There is no statistically significant effect of gender on survival in data. The p-value for gender is above the typical threshold of 0.05, and the confidence interval includes 1, indicating no strong evidence of an association.
 
 **AGE_AT_ADMISSION:** Age is a significant predictor of survival. The positive hazard ratio of 1.04 means that older patients are at a slightly higher risk of the event (death, etc.), and this result is statistically significant (p-value < 0.0001).
+
+### 2.4.3. Outcome 3: Length of ICU Stay by Patients Data
+
+``` {r Length of ICU Stay by Patients Data}
+result_age <- analyze_predictor_LOS(combined_data_los, predictor = "AGE_AT_ADMISSION", LOS = "LOS", patient_id = "SUBJECT_ID")
+result_sex <- analyze_predictor_LOS(combined_data_los, predictor = "GENDER", LOS = "LOS", patient_id = "SUBJECT_ID")
+
+
+# Merge the results
+merged_results <- bind_rows(result_age, result_sex)
+print(merged_results)
+
+```
 
 # 3. Admissions Data
 
@@ -633,7 +718,8 @@ admissions %>%
 
 ```{r death status by admissions data}
 patients_admissions <- patients %>%
-  left_join(admissions, by = "SUBJECT_ID")
+  left_join(admissions, by = "SUBJECT_ID") %>%
+  
 
 # Prepare the data for plotting
 patients_admissions_long <- patients_admissions %>%
@@ -668,6 +754,7 @@ for (var in categorical_vars) {
 
 ```{r}
 # Perform the statistical tests for both variables
+patients_admissions$ADMISSION_TYPE <- droplevels(patients_admissions$ADMISSION_TYPE)
 result_ADMISSION_TYPE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
 result_INSURANCE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "INSURANCE", "INSURANCE")
 result_RELIGION <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "RELIGION", "RELIGION")
@@ -677,4 +764,7 @@ result_ETHNICITY <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG"
 # Merge the results
 merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
 print(merged_results)
+
+
+
 ```
