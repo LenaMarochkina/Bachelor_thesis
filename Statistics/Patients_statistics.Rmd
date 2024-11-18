@@ -174,9 +174,14 @@ HR_assessment <- function(survival_time, event_status, predictors, data) {
   # Extract p-values
   p_values <- summary(cox_model)$coefficients[, "Pr(>|z|)"]
   
+  # Get the variable names corresponding to each coefficient
+  variable_names <- names(coef(cox_model))
+  
   # Format p-values helper function
   format_p_value <- function(p) {
-    if (p < 0.0001) {
+    if (is.na(p)) {
+      return("NA")  # Handle missing p-values
+    } else if (p < 0.0001) {
       return("< 0.0001")  # Very small p-values
     } else {
       return(formatC(p, format = "f", digits = 4))  # Standard decimal notation
@@ -185,7 +190,7 @@ HR_assessment <- function(survival_time, event_status, predictors, data) {
   
   # Create a tibble with hazard ratios, confidence intervals, and p-values
   hr_table <- tibble(
-    Variable = predictors,
+    Variable = variable_names,
     Hazard_Ratio = hr,
     Lower_CI = hr_ci[, 1],
     Upper_CI = hr_ci[, 2],
@@ -680,8 +685,8 @@ Both **Age and Gender** show highly significant associations with death status (
 ### 2.4.2. Outcome 2: Length of Survival by Patients Data
 
 ```{r Length of Survival by Patients DataExploratory analysis}
-patients_admissions <- patients %>%
-  left_join(admissions_outcome, by = "SUBJECT_ID") %>%
+patients_admissions <- admissions_outcome %>%
+  left_join(patients, by = "SUBJECT_ID") %>%
   select(SUBJECT_ID, SURVIVAL, EXPIRE_FLAG, AGE_AT_ADMISSION, GENDER) %>%
   mutate(
     EXPIRE_FLAG = as.numeric(as.character(EXPIRE_FLAG))  # Ensure EXPIRE_FLAG is numeric
@@ -729,7 +734,7 @@ ggsurvplot(
 
 hr_table <- HR_assessment("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_admissions)
 
-print(merged_results)
+print(hr_table)
 
 ```
 
@@ -823,13 +828,109 @@ for (var in categorical_vars) {
 
 ### 3.3.2. Outcome 2: Length of Survival by Admissions Data
 
+``` {r Outcome 2: Length of Survival by Admissions Data visualisation}
+
+admissions_clean <- admissions_outcome %>%
+  left_join(admissions, by = c("SUBJECT_ID", "SURVIVAL"))
+
+# Plot 1: ADMISSION_TYPE
+plot_admission <- ggplot(admissions_clean, aes(x = ADMISSION_TYPE, y = SURVIVAL, fill = ADMISSION_TYPE)) +
+  geom_boxplot() +
+  labs(title = "Survival by Admission Type",
+       x = "Admission Type",
+       y = "Survival (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$ADMISSION_TYPE)))) +
+  theme_custom
+
+# Plot 2: INSURANCE
+plot_insurance <- ggplot(admissions_clean, aes(x = INSURANCE, y = SURVIVAL, fill = INSURANCE)) +
+  geom_boxplot() +
+  labs(title = "Survival by Insurance Type",
+       x = "Insurance",
+       y = "Survival (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$INSURANCE)))) +
+  theme_custom
+
+# Plot 3: MARITAL_STATUS
+plot_marital_status <- ggplot(admissions_clean, aes(x = MARITAL_STATUS, y = SURVIVAL, fill = MARITAL_STATUS)) +
+  geom_boxplot() +
+  labs(title = "Survival by Marital Status",
+       x = "Marital Status",
+       y = "Survival (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$MARITAL_STATUS)))) +
+  theme_custom
+
+# Plot 4: ETHNICITY
+plot_ethnicity <- ggplot(admissions_clean, aes(x = ETHNICITY, y = SURVIVAL, fill = ETHNICITY)) +
+  geom_boxplot() +
+  labs(title = "Survival by Ethnicity",
+       x = "Ethnicity",
+       y = "Survival (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$ETHNICITY)))) +
+  theme_custom
+
+# Plot 5: RELIGION
+plot_religion <- ggplot(admissions_clean, aes(x = RELIGION, y = SURVIVAL, fill = RELIGION)) +
+  geom_boxplot() +
+  labs(title = "Survival by Religion",
+       x = "Religion",
+       y = "Survival (Days)") +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$RELIGION)))) +
+  theme_custom
+
+# Function to create the plot
+create_admission_plot <- function(data, x_var, color_palette, theme_custom) {
+  ggplot(data, aes_string(x = x_var, y = "SURVIVAL", fill = x_var, color = x_var)) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    geom_jitter(width = 0.2, alpha = 0.5) +
+    theme_custom +
+    scale_fill_manual(values = color_palette) +  # Color for boxplot fill
+    scale_color_manual(values = color_palette) + # Color for jitter points
+    labs(
+      title = paste("Time to Death by", x_var),
+      y = "Time to Death (Days)", x = x_var
+    ) +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(size = 12, face = "bold")
+    )
+}
+
+# Define the admission variables
+admission_vars <- c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "ETHNICITY", "RELIGION")
+
+# Create a list to store the plots
+plots <- lapply(admission_vars, function(var) {
+  create_admission_plot(admissions_clean, var, color_palette, theme_custom)
+})
+
+# Name the plots for easy reference
+names(plots) <- admission_vars
+for (var_name in names(plots)) {
+  cat("\nPlot for:", var_name, "\n")  # Print the variable name
+  print(plots[[var_name]])
+}
+
+``` 
+
 ### 3.3.3. Outcome 3: Length of ICU Stay by Admissions Data
+
+``` {r Outcome 3: Length of ICU Stay by Admissions Data visualisation}
+
+```
 
 
 ## 3.4. Exploratory analysis
 ### 3.4.1. Outcome 1: Death Status by Admissions Data
 
 ```{r Death Status by Admissions Data }
+patients_admissions <- admissions_clean %>%
+  left_join(patients, by = "SUBJECT_ID") %>%
+  select(SUBJECT_ID, SURVIVAL, EXPIRE_FLAG, ADMISSION_TYPE, INSURANCE, MARITAL_STATUS, RELIGION, ETHNICITY ) %>%
+  mutate(
+    EXPIRE_FLAG = as.numeric(as.character(EXPIRE_FLAG))  # Ensure EXPIRE_FLAG is numeric
+  )
+
 # Perform the statistical tests for both variables
 patients_admissions$ADMISSION_TYPE <- droplevels(patients_admissions$ADMISSION_TYPE)
 
@@ -845,3 +946,103 @@ merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELI
 print(merged_results)
 
 ```
+
+### 3.4.2. Outcome 2: Length of Survival by Admissions Data
+
+```{r}
+
+# Generate Kaplan-Meier survival curve by GENDER
+fit_admission_type <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ ADMISSION_TYPE, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_admission_type,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value for gender
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  legend.title = "Admission type",
+  title = "Survival Curve by Admission Type",
+  palette =  color_palette
+)
+
+fit_insurance <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ INSURANCE, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve 
+ggsurvplot(
+  fit_insurance,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value for age groups
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Insurance",
+  title = "Survival Curve by Insurance",
+  palette = color_palette
+)
+
+# Fit Kaplan-Meier model
+fit_religion <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ RELIGION, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_religion,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Religion",
+  title = "Survival Curve by Religion",
+  palette = color_palette
+)
+
+# Fit Kaplan-Meier model
+fit_marital_status <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ MARITAL_STATUS, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_marital_status,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Marital Status",
+  title = "Survival Curve by Marital Status",
+  palette = color_palette
+)
+
+# Fit Kaplan-Meier model
+fit_ethnicity <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ ETHNICITY, data = patients_admissions)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_ethnicity,
+  data = patients_admissions,
+  pval = TRUE,  # Display p-value
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Ethnicity",
+  title = "Survival Curve by Ethnicity",
+  palette = color_palette
+)
+
+hr_table <- HR_assessment("SURVIVAL", "EXPIRE_FLAG", c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "RELIGION", "ETHNICITY"), patients_admissions)
+
+print(hr_table)
+
+```
+
+### 3.4.3. Outcome 3: Length of ICU Stay by Admissions Data
+
+``` {r Length of ICU Stay by Patients Data}
+
+result_age <- analyze_predictor_LOS(combined_data_los, predictor = "AGE_AT_ADMISSION", LOS = "LOS", patient_id = "SUBJECT_ID")
+result_sex <- analyze_predictor_LOS(combined_data_los, predictor = "GENDER", LOS = "LOS", patient_id = "SUBJECT_ID")
+
+
+# Merge the results
+merged_results <- bind_rows(result_age, result_sex)
+print(merged_results)
