@@ -37,4 +37,4 @@ microbiology_clean <- microbiology_clean %>%
   mutate(RES_AB_COUNT = ifelse(is.na(RES_AB_COUNT), 0, RES_AB_COUNT))  # Replace NA with 0 where no resistance
 
 # Write cleaned microbiology to csv
-write.csv(microbiology_clean, "data/raw/cleaned/MICROBIOLOGY_clean.csv")
+write.csv(microbiology_clean, "data/raw/cleaned/MICROBIOLOGY_clean.csv", row.names = FALSE)

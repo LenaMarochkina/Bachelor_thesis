@@ -183,7 +183,7 @@ admissions_clean <- admissions_clean %>%
 
 # Choose necessary columns after checking all data
 admissions_clean <- admissions_clean %>%
-  select(SUBJECT_ID, HADM_ID, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, SURVIVAL)
+  select(SUBJECT_ID, HADM_ID, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, SURVIVAL,  DIAGNOSIS)
 
 # Write cleaned admissions to csv
 write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)

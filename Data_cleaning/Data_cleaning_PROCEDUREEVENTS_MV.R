@@ -81,4 +81,4 @@ procedureevents_clean <- procedureevents_clean %>%
   select(-STARTTIME, -ENDTIME)
 
 # Write cleaned admissions to csv
-write.csv(procedureevents_clean, "data/raw/cleaned/PROCEDURES_clean.csv")
+write.csv(procedureevents_clean, "data/raw/cleaned/PROCEDURES_clean.csv", row.names = FALSE)

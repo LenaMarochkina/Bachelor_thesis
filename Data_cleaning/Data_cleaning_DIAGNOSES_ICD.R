@@ -90,5 +90,5 @@ diagnoses_clean <- diagnoses_clean %>%
   relocate(DIAGNOSES_NUM, .after = SEQ_NUM)
 
 # Write cleaned diagnoses data to csv
-write.csv(diagnoses_clean, "data/raw/cleaned/DIAGNOSES_ICD_clean.csv")
+write.csv(diagnoses_clean, "data/raw/cleaned/DIAGNOSES_ICD_clean.csv", row.names = FALSE)
   

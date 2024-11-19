@@ -390,4 +390,4 @@ update_atc_codes <- function(data) {
 }
 
 # Write cleaned admissions to csv
-write.csv(prescriptions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv")
+write.csv(prescriptions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)

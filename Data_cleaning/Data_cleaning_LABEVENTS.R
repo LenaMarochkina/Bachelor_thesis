@@ -235,5 +235,5 @@ LABS_VALUE <- labs_clean %>%
   distinct()
 
 # Write cleaned admissions to csv
-write.csv(labs_clean, "data/raw/cleaned/LABEVENTS_clean.csv")
+write.csv(labs_clean, "data/raw/cleaned/LABEVENTS_clean.csv", row.names = FALSE)
 

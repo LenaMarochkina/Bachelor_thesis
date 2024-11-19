@@ -62,4 +62,4 @@ if (nrow(inconsistent_rows) > 0) {
 }
 
 # Write cleaned admissions to csv
-write.csv(callout_clean, "data/raw/cleaned/CALLOUT_clean.csv")
+write.csv(callout_clean, "data/raw/cleaned/CALLOUT_clean.csv", row.names = FALSE)
