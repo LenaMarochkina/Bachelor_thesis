@@ -89,6 +89,9 @@ diagnoses_clean <- diagnoses_clean %>%
 diagnoses_clean <- diagnoses_clean %>%
   relocate(DIAGNOSES_NUM, .after = SEQ_NUM)
 
+# Create composed Subject_id
+diagnoses_clean <- diagnoses_clean %>%
+  mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
 # Write cleaned diagnoses data to csv
 write.csv(diagnoses_clean, "data/raw/cleaned/DIAGNOSES_ICD_clean.csv", row.names = FALSE)
-  

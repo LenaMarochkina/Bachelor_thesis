@@ -177,13 +177,25 @@ admissions_clean <- admissions_clean %>%
     SURVIVAL = ifelse(SURVIVAL < 0, abs(SURVIVAL), SURVIVAL)
   )
 
+# Create Death Outcome flag
+admissions_clean <- admissions_clean %>%
+  mutate(
+    SURVIVAL_FLAG = if_else(
+      is.na(DEATHTIME), 0, 1  # Handle NA values explicitly
+    )
+  )
+
+# Create composed Subject_id
+admissions_clean <- admissions_clean %>%
+  mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
 # Ensure no duplicates after merging
 admissions_clean <- admissions_clean %>%
   distinct(SUBJECT_ID, HADM_ID, .keep_all = TRUE)
 
 # Choose necessary columns after checking all data
 admissions_clean <- admissions_clean %>%
-  select(SUBJECT_ID, HADM_ID, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, SURVIVAL,  DIAGNOSIS)
+  select(SUBJECT_ID, HADM_ID, SUBJECT_ID_COMPOSE, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, SURVIVAL, SURVIVAL_FLAG)
 
 # Write cleaned admissions to csv
 write.csv(admissions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)

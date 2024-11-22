@@ -9,7 +9,7 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE, echo = FALSE)
 
 ```
 
@@ -29,6 +29,7 @@ library(survminer)
 library(ggpubr)
 library(lme4)   
 library(lmerTest) 
+library(glmnet)
 
 
 # Custom theme for visualisations
@@ -205,19 +206,64 @@ HR_assessment <- function(survival_time, event_status, predictors, data) {
     }
   }
   
-  # Create a tibble with hazard ratios, confidence intervals, and p-values
+  # Add interpretation logic
+  interpret_hr <- function(hr) {
+    if (is.na(hr)) {
+      return("NA")  # Handle missing HRs
+    } else if (hr > 1) {
+      return("Increased risk")
+    } else if (hr == 1) {
+      return("No change in risk")
+    } else {
+      return("Decreased risk")
+    }
+  }
+  
+  # Create a tibble with hazard ratios, confidence intervals, p-values, and interpretations
   hr_table <- tibble(
     Variable = variable_names,
     Hazard_Ratio = hr,
     Lower_CI = hr_ci[, 1],
     Upper_CI = hr_ci[, 2],
-    p_value = sapply(p_values, format_p_value)  # Apply p-value formatting
+    p_value = sapply(p_values, format_p_value),  # Apply p-value formatting
+    Interpretation = sapply(hr, interpret_hr)   # Apply HR interpretation
   )
   
   # Return the hazard ratio table
   return(hr_table)
 }
 
+```
+
+```{r penalized COX Regression}
+# Function to run Penalized Cox Regression
+run_penalized_cox <- function(data, survival_time, event_status, predictors, penalty = "lasso") {
+  # Define alpha based on penalty type
+  alpha_value <- ifelse(penalty == "lasso", 1, 0)  # LASSO = 1, Ridge = 0
+  
+  # Prepare survival object and predictors matrix
+  survival_outcome <- with(data, Surv(get(survival_time), get(event_status)))
+  predictor_matrix <- model.matrix(~ . -1, data = data[, predictors, drop = FALSE])
+  
+  # Cross-validated penalized Cox model
+  cv_model <- cv.glmnet(
+    x = predictor_matrix,
+    y = survival_outcome,
+    family = "cox",
+    alpha = alpha_value
+  )
+  
+  # Get coefficients at optimal lambda
+  optimal_coefs <- coef(cv_model, s = "lambda.min")
+  
+  # Return key results
+  list(
+    optimal_lambda = cv_model$lambda.min,
+    coefficients = optimal_coefs,
+    significant_features = rownames(optimal_coefs)[as.matrix(optimal_coefs) != 0],
+    cv_model = cv_model
+  )
+}
 ```
 
 ``` {r LOS Analysis}
@@ -308,7 +354,7 @@ subject_ids_adults <- patients$SUBJECT_ID
 # Read the ADMISSIONS dataset and filter using the SUBJECT_ID vector
 admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFactors = TRUE) %>%
   filter(SUBJECT_ID %in% subject_ids_adults) %>% # Filter for adult patients 
-  mutate(across(c(SUBJECT_ID, HADM_ID), as.factor)) 
+  mutate(across(c(SUBJECT_ID, HADM_ID, SUBJECT_ID_COMPOSE), as.factor))
 
 # Read the ICUSTAYS dataset and filter using the SUBJECT_ID vector
 icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE) %>%
@@ -321,8 +367,12 @@ icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors
 ### 1.2.1. Outcome 1: Death Status
 
 ```{r descriptive statistics for death status}
-patients %>%
-  select(EXPIRE_FLAG) %>%
+# Death status outcome
+Death_status_outcome <- admissions %>%
+  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, SURVIVAL_FLAG)
+
+admissions %>%
+  select(SURVIVAL_FLAG) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
   group_by(Variable, Value) %>%
   summarise(n = n(), .groups = 'drop') %>%
@@ -340,37 +390,39 @@ patients %>%
 ```
 
 ```{r barplot for death status}
-# Visualization for EXPIRE_FLAG in patients dataset
-ggplot(patients, aes(x = as.factor(EXPIRE_FLAG), fill = as.factor(EXPIRE_FLAG))) +
+# Visualization for EXPIRE_FLAG in admissions dataset
+ggplot(admissions, aes(x = as.factor(SURVIVAL_FLAG), fill = as.factor(SURVIVAL_FLAG))) +
   geom_bar(color = "black") +
-    geom_text(stat = "count", aes(label = after_stat(count)),
+  geom_text(
+          stat = "count", aes(label = after_stat(count)),
             size = 3, 
             fontface = "bold", 
-            vjust = -0.5) +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)), replace = FALSE), labels = c("0" = "Not Dead", "1" = "Dead")) +
-  labs(title = "Distribution of Death Status", x = "Death Status", y = "Count", fill = "Death Status") +
+            vjust = -0.5
+    ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(admissions$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Not Dead", "1" = "Dead")
+    ) +
+  labs(
+    title = "Distribution of Death Status", x = "Death Status", y = "Count", fill = "Death Status"
+    ) +
   theme_custom
 
 ```
 
--   There were 30,761 patients who did not die (labeled "Not Dead").
--   There were 15,759 patients who died (labeled "Dead").
+-   There were 45,007 ICU stays when patient did not die (labeled "Not Dead").
+-   There were 5,735 ICU stays when patient died (labeled "Dead").
 
-This indicates that a higher proportion of patients in the dataset survived compared to those who did not. The ratio of surviving patients to deceased patients is approximately 2:1, which suggests that while mortality is significant, more patients survived than passed away during the period considered.
+This indicates that a higher proportion of patients in the dataset survived compared to those who did not. 
 
 ### 1.2.2. Outcome 2: Length of Survival
 
 ```{r descriptive statistics for length of survival}
-# Create admissions_outcome file whith unique SUBJECT_ID and summarise SURVIVAL
-admissions_outcome <- admissions %>%
-  select(SURVIVAL,SUBJECT_ID) %>%
-  group_by(SUBJECT_ID) %>%
-  summarise(
-    SURVIVAL = sum(SURVIVAL, na.rm = TRUE)
-  ) %>%
-  ungroup()
+# Create Survival_outcome file whith unique SUBJECT_ID and summarise SURVIVAL
+Survival_outcome <- admissions %>%
+  select(SURVIVAL, SURVIVAL_FLAG, SUBJECT_ID, SUBJECT_ID_COMPOSE)
 
-admissions_outcome %>%
+Survival_outcome %>%
   select(SURVIVAL) %>%
   summarise(across(everything(), statistics)) %>%
   pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
@@ -387,20 +439,20 @@ admissions_outcome %>%
 
 ``` {r outliers check for length of survival}
 # Calculate mean and standard deviation
-mean_value <- mean(admissions_outcome$SURVIVAL, na.rm = TRUE)
-sd_value <- sd(admissions_outcome$SURVIVAL, na.rm = TRUE)
+mean_value <- mean(Survival_outcome$SURVIVAL, na.rm = TRUE)
+sd_value <- sd(Survival_outcome$SURVIVAL, na.rm = TRUE)
 
 # Define the 3-sigma range
 lower_bound <- mean_value - 3 * sd_value
 upper_bound <- mean_value + 3 * sd_value
 
 # Identify outliers
-outliers <- admissions_outcome %>%
+outliers <- Survival_outcome %>%
   filter(SURVIVAL < lower_bound | SURVIVAL > upper_bound)
 
 # Calculate the number and percentage of outliers
 num_outliers <- nrow(outliers)
-total_values <- nrow(admissions_outcome)
+total_values <- nrow(Survival_outcome)
 percent_outliers <- (num_outliers / total_values) * 100
 
 # Print the number and percentage of outliers
@@ -408,15 +460,18 @@ cat("Number of outliers:", num_outliers, "\n")
 cat("Percentage of outliers:", round(percent_outliers, 2), "%\n")
 
 # Filter out the outliers
-admissions_outcome <- admissions_outcome %>%
+Survival_outcome <- Survival_outcome %>%
   filter(SURVIVAL >= lower_bound & SURVIVAL <= upper_bound)
+
+# Clean the memory
+rm(outliers, mean_value, sd_value, lower_bound, upper_bound, num_outliers, percent_outliers, total_values)
 ```
 
 Based on the small percentage of outliers observed, it was decided to filter them out. These outliers could potentially represent patients who were in a prolonged coma or had unusually extended hospital stays.
 
 ```{r boxplot for length of survival}
 # Boxplot for TIMETODEATH
-ggplot(admissions_outcome, aes(y = SURVIVAL)) +
+ggplot(Survival_outcome, aes(y = SURVIVAL)) +
   geom_boxplot(fill = color_palette[4], color = "black") +
   labs(title = "Boxplot of Time to Death (in Days)",
        y = "Time to Death (in days)") +
@@ -425,7 +480,7 @@ ggplot(admissions_outcome, aes(y = SURVIVAL)) +
 ```
 
 ```{r density plot for length of survival}
-ggplot(admissions_outcome, aes(x = SURVIVAL)) +
+ggplot(Survival_outcome, aes(x = SURVIVAL)) +
   geom_density(fill = color_palette[14], alpha = 0.7) +
   labs(title = "Density Plot of Time to Death (in Days)",
        x = "Time to Death (in days)",
@@ -433,11 +488,14 @@ ggplot(admissions_outcome, aes(x = SURVIVAL)) +
   theme_custom
 ```
 
-The boxplot and density plot show that most patients died within 0 to 30 days, with a median around 10 days. There are still several outliers, indicating some patients survived much longer, possibly due to unique conditions such as prolonged illness or coma.
+The boxplot and density plot show that most patients died within 0 to 10 days, with a median around 7 days. There are still several outliers, indicating some patients survived much longer, possibly due to unique conditions such as prolonged illness or coma.
 
 ### 1.2.3. Outcome 3: Length of ICU Stay
 
 ```{r descriptive statistics for length of ICU stay}
+# LOS outcome
+LOS_outcome <- icu_stays %>%
+  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, LOS)
 
 icu_stays %>%
   select(LOS) %>%
@@ -456,37 +514,41 @@ icu_stays %>%
 
 ```{r check for outliers for length of ICU stay}
 # Calculate mean and standard deviation for LOS variable
-mean_los <- mean(icu_stays$LOS, na.rm = TRUE)
-sd_los <- sd(icu_stays$LOS, na.rm = TRUE)
+mean_los <- mean(LOS_outcome$LOS, na.rm = TRUE)
+sd_los <- sd(LOS_outcome$LOS, na.rm = TRUE)
 
 # Identify outliers using the 3-sigma rule
-icu_stays$outlier_los <- ifelse(
-  icu_stays$LOS > (mean_los + 3 * sd_los) | icu_stays$LOS < (mean_los - 3 * sd_los),
+LOS_outcome$outlier_los <- ifelse(
+  LOS_outcome$LOS > (mean_los + 3 * sd_los) | LOS_outcome$LOS < (mean_los - 3 * sd_los),
   TRUE, 
   FALSE
 )
 
 # Count the number and percentage of outliers
-num_outliers_los <- sum(icu_stays$outlier_los, na.rm = TRUE)
-percent_outliers_los <- (num_outliers_los / nrow(icu_stays)) * 100
+num_outliers_los <- sum(LOS_outcome$outlier_los, na.rm = TRUE)
+percent_outliers_los <- (num_outliers_los / nrow(LOS_outcome)) * 100
 
 # Print results
 cat("Number of outliers in LOS:", num_outliers_los, "\n")
 cat("Percentage of outliers in LOS:", round(percent_outliers_los, 2), "%\n")
 
 # Filter out the outliers
-icu_stays_outcome <- icu_stays %>%
-  select(LOS, SUBJECT_ID, HADM_ID, outlier_los) %>%
+LOS_outcome <- LOS_outcome %>%
+  select(LOS, SUBJECT_ID, SUBJECT_ID_COMPOSE, outlier_los) %>%
   filter(outlier_los == FALSE)
 
 # Drop the outlier column after filtering
-icu_stays$outlier_los <- NULL
+LOS_outcome$outlier_los <- NULL
+
+# Clean the memory
+rm(mean_los, sd_los, num_outliers_los, percent_outliers_los)
+
 ```
 
-Based on the relatively small percentage of outliers (1.95%), it was decided to filter them out from the icu_stays dataset. This filtering helps ensure a more robust analysis by excluding extreme cases that could disproportionately impact the results. It's worth noting that some of these outliers could represent unique cases, such as patients in a coma or those with extended ICU stays due to complex medical conditions.
+Based on the relatively small percentage of outliers (2.29%), it was decided to filter them out from the icu_stays dataset. This filtering helps ensure a more robust analysis by excluding extreme cases that could disproportionately impact the results. It's worth noting that some of these outliers could represent unique cases, such as patients in a coma or those with extended ICU stays due to complex medical conditions.
 
 ```{r violin plot for length of ICU stay}
-ggplot(icu_stays_outcome, aes(x = "", y = LOS)) +
+ggplot(LOS_outcome, aes(x = "", y = LOS)) +
   geom_violin(fill = color_palette[10], color = "black") +
   geom_boxplot(width = 0.1, fill = "white", outlier.shape = NA) +
   labs(title = "Violin Plot of Length of ICU Stay (LOS)",
@@ -510,7 +572,7 @@ patients <- patients %>%
   ) %>%
   filter(SUBJECT_ID %in% subject_ids_adults) # Filter for adult patients 
 
-skimr::skim(patients)
+skimr::skim(patients %>% select(-ROW_ID, -SUBJECT_ID))
 ```
 
 ## 2.2. Desriptive Statistics
@@ -538,7 +600,7 @@ patients %>%
 ```{r Descriptive statistics patients for categorical vars}
 # Clean and summarize the categorical data for all factor variables
 patients %>%
-  select(-DOB, -DOD, -SUBJECT_ID) %>%
+  select(-DOB, -DOD, -SUBJECT_ID, -EXPIRE_FLAG) %>%
   select(where(is.factor)) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
   group_by(Variable, Value) %>%
@@ -561,33 +623,51 @@ patients %>%
 ### 2.3.1. Outcome 1: Death Status by Patients Data
 
 ```{r death status by gender}
-ggplot(patients, aes(x = GENDER, fill = EXPIRE_FLAG)) +
+patients_death_status <- Death_status_outcome %>%
+  left_join(patients, by = "SUBJECT_ID") %>%
+  select(SUBJECT_ID, AGE_AT_ADMISSION, GENDER, SURVIVAL_FLAG) %>%
+  distinct() %>%
+  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))  # Convert to factor
+
+ggplot(patients_death_status, aes(x = GENDER, fill = SURVIVAL_FLAG)) +
   geom_bar(position = position_dodge2(width = 0.9), color = "black") +
-  geom_text(stat = 'count', aes(label = after_stat(count)), position = position_dodge2(width = 0.9), vjust = -0.5) +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)), replace = FALSE), labels = c("0" = "Not Dead", "1" = "Dead")) +
-  labs(title = "Death Status by Gender", x = "Gender", y = "Count", fill = "Death Status") +
-  theme_custom
+  geom_text(
+    stat = 'count', aes(label = after_stat(count)),
+    position = position_dodge2(width = 0.9), vjust = -0.5
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(patients_death_status$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Survive", "1" = "Died")
+  ) +
+  labs(
+    title = "Death Status by Gender",
+    x = "Gender",
+    y = "Count",
+    fill = "Death Status"
+  ) +
+  theme_custom 
 ```
 
--   Males (M) have a higher count in both survival (17,597) and death (8,524) categories compared to females.
--   Females (F) have a lower count, with 13,164 surviving and 7,235 deceased.
+-   Males (M) have a higher count in both survival (19,569) and death (3,068) categories compared to females.
+-   Females (F) have a lower count, with 14,707 surviving and 2,652 deceased.
 
 This suggests that while the total number of male patients is higher, the proportion of deceased individuals appears similar across genders.
 
 ```{r death status by age at admission}
-ggplot(patients, aes(x = AGE_AT_ADMISSION, fill = EXPIRE_FLAG)) +
-  geom_histogram(binwidth = 5, alpha = 0.7, position = "identity", color = "black") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG))), labels = c("0" = "Not Dead", "1" = "Dead")) +
+ggplot(patients_death_status, aes(x = AGE_AT_ADMISSION, fill = SURVIVAL_FLAG)) +
+  geom_histogram(binwidth = 5, alpha = 0.6, position = "identity", color = "black") +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(patients_death_status$SURVIVAL_FLAG))), 
+    labels = c("0" = "Survive", "1" = "Died")
+    ) +
   labs(title = "Death Status by Age at Admission", 
        x = "Age at Admission", 
        y = "Count", 
        fill = "Death Status") +
   theme_custom
-
 ```
 
--   Increasing Death Rate with Age: The number of deaths increases as age at admission increases, particularly noticeable in older age groups (60+ years). This suggests a higher mortality rate with increasing age.
--   Peak in Midlife and Elderly: The number of admissions peaks around middle age (45–65) with a higher number of surviving patients but a noticeable increase in death cases as age progresses.
+The histogram shows that most patients are admitted between 50–80 years, with survival dominating across all ages. However, the proportion of deaths increases with age, especially after 75, indicating that older patients are more likely to die. Age is clearly a key factor influencing mortality.
 
 During the exploratory data analysis, a significant spike in admissions for newborns (age 0) was observed, with the vast majority of these infants being alive. After careful consideration, it was decided to exclude the data for newborns (age 0) from our analysis.
 
@@ -610,78 +690,136 @@ By excluding newborns, we ensure that the survival analysis reflects more accura
 
 ```{r length of survival by age and gender}
 # Merge admissions with patients data to include AGE_AT_ADMISSION
-admissions_patients <- admissions_outcome %>%
-  left_join(patients, by = "SUBJECT_ID")
+patients_survival_outcome <- Survival_outcome %>%
+  left_join(patients, by = "SUBJECT_ID") %>%
+  select(SUBJECT_ID, AGE_AT_ADMISSION, GENDER, SURVIVAL_FLAG, SURVIVAL) %>%
+  distinct() %>%
+  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))  # Convert to factor
+
+ggplot(patients_survival_outcome, aes(x = AGE_AT_ADMISSION, y = SURVIVAL, color = GENDER)) +
+  geom_point(alpha = 0.7, size = 2, shape = 16, stroke = 0.3) +  # Scatter points
+  geom_smooth(method = "lm", se = TRUE, size = 1, linetype = "solid", alpha = 0.2, colour = "grey40") +  # Add linear regression line
+  labs(
+    title = "Length of Survival by Age",
+    x = "Age at Admission",
+    y = "Time to Death (Days)",
+    color = "Gender"
+  ) +
+  scale_color_manual(
+    values = sample(color_palette, size = length(unique(patients_survival_outcome$GENDER)), replace = FALSE)
+  ) +
+  theme_custom +
+  theme(
+    panel.grid.major = element_line(color = "grey90", size = 0.5),
+    legend.position = "right"
+  )
 
 # Create a new age group column based on quintiles
-age_breaks <- quantile(admissions_patients$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
+age_breaks <- quantile(patients_survival_outcome$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
 age_labels <- paste0("(", round(head(age_breaks, -1)), "-", round(tail(age_breaks, -1)), "]")
 
-admissions_patients <- admissions_patients %>%
+patients_survival_outcome <- patients_survival_outcome %>%
   mutate(AGE_QUINTILE = cut(AGE_AT_ADMISSION, 
                             breaks = age_breaks,
                             include.lowest = TRUE,
                             labels = age_labels))
 
 # Plot including age quintiles as facets
-ggplot(admissions_patients, aes(x = GENDER, y = SURVIVAL, fill = GENDER)) +
+ggplot(patients_survival_outcome, aes(x = GENDER, y = SURVIVAL, fill = GENDER)) +
   geom_boxplot() +
   facet_wrap(~ AGE_QUINTILE, ncol = 3) +  # Facet by age quintiles
   labs(title = "Length of Survival by Gender and Age Quintile",
        x = "Gender",
        y = "Time to Death (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients_survival_outcome$GENDER)))) +
   theme_custom
 
-ggplot(admissions_patients, aes(x = SURVIVAL, y = as.factor(AGE_QUINTILE), fill = GENDER, color = GENDER)) +
-  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-  geom_jitter(width = 0.2, alpha = 0.5) +
+ggplot(patients_survival_outcome, aes(x = SURVIVAL, y = as.factor(AGE_QUINTILE), fill = GENDER, color = GENDER)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, position = position_dodge2(preserve = "single")) +
+  geom_jitter(width = 0.2, alpha = 0.5, size = 1.5) +
   facet_wrap(~GENDER, scales = "free_y") +
-  theme_custom +
- scale_fill_manual(values = color_palette) +  # Color for boxplot fill
-  scale_color_manual(values = color_palette) + # Color for jitter points
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients_survival_outcome$GENDER)), replace = FALSE)) +
+  scale_color_manual(values = sample(color_palette, size = length(unique(patients_survival_outcome$GENDER)), replace = FALSE)) +
   labs(
     title = "Time to Death by Age Quintile for Males and Females",
-    y = "Time to Death (Days)", x = "Age Quintile"
+    y = "Age Quintile",
+    x = "Time to Death (Days)",
+    fill = "Gender",
+    color = "Gender"
   ) +
+  theme_custom +
   theme(
-    legend.position = "none",
+    legend.position = "right",
     strip.text = element_text(size = 12, face = "bold")
   )
 
+rm(age_breaks, age_labels)
+
 ```
 
-The plot allows for the visualization of how gender and age interact to influence survival times. It suggests that older females tend to have longer survival times than older males, but there are significant outliers in each group. The presence of NA age values indicates patients whose age could not be determined.
+The plots allow for the visualization of how gender and age interact to influence survival times.
+
+*Scatter Plot: Length of Survival by Age*
+
+- No clear correlation between age at admission and time to death. Survival time is distributed across all age groups.
+- Both male and female distributions appear similar, with no noticeable trend favoring one gender.
+
+*Faceted Scatter Plot: Time to Death by Age Quintile and Gender*
+
+- Age Quintiles: Older age groups (e.g., 80-93) show slightly higher clustering of shorter survival times.
+- Within each age group, survival patterns for males and females are similar, indicating no strong gender-based differences in survival outcomes.
 
 ### 2.3.3. Outcome 3: Length of ICU Stay by Patients Data
 
 ```{r length of ICU stay by gender and age}
 # Merge icu_stays with patients data to include AGE_AT_ADMISSION
-combined_data_los_patients <- icu_stays_outcome %>%
-  left_join(patients, by = "SUBJECT_ID")
+patients_los_outcome <- LOS_outcome %>%
+  left_join(patients, by = "SUBJECT_ID") %>%
+  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, LOS, AGE_AT_ADMISSION, GENDER)
+
+ggplot(patients_los_outcome, aes(x = AGE_AT_ADMISSION, y = LOS, color = GENDER)) +
+  geom_point(alpha = 0.7, size = 2, shape = 16, stroke = 0.3) +  # Scatter points
+  geom_smooth(method = "lm", se = TRUE, size = 1, linetype = "solid", alpha = 0.2, colour = "grey40") +  # Add linear regression line
+  labs(
+    title = "Length of Stay (LOS) by by Age",
+    x = "Age at Admission",
+    y = "Length of Stay (Days)",
+    color = "Gender"
+  ) +
+  scale_color_manual(
+    values = sample(color_palette, size = length(unique(patients_los_outcome$GENDER)), replace = FALSE)
+  ) +
+  theme_custom +
+  theme(
+    panel.grid.major = element_line(color = "grey90", size = 0.5),
+    legend.position = "right"
+  )
 
 # Create a new age group column based on quintiles
-age_breaks_los <- quantile(combined_data_los_patients$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
+age_breaks_los <- quantile(patients_los_outcome$AGE_AT_ADMISSION, probs = seq(0, 1, 0.2), na.rm = TRUE)
 age_labels_los <- paste0("(", round(head(age_breaks_los, -1)), "-", round(tail(age_breaks_los, -1)), "]")
 
-combined_data_los_patients <- combined_data_los_patients %>%
+patients_los_outcome <- patients_los_outcome %>%
   mutate(AGE_QUINTILE = cut(AGE_AT_ADMISSION, 
                              breaks = age_breaks_los,
                              include.lowest = TRUE,
                              labels = age_labels_los))
 
 # Plot including age quintiles as facets for Length of Stay (LOS)
-ggplot(combined_data_los_patients, aes(x = GENDER, y = LOS, fill = GENDER)) +
+ggplot(patients_los_outcome, aes(x = GENDER, y = LOS, fill = GENDER)) +
   geom_boxplot() +
   facet_wrap(~ AGE_QUINTILE, ncol = 3) +
   labs(title = "Length of Stay (LOS) by Gender and Age Quintile",
        x = "Gender",
        y = "Length of Stay (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)))) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(patients_los_outcome$GENDER)))) +
   theme_custom
+
+rm(age_breaks_los, age_labels_los)
 ```
 
-Overall, this boxplot provides valuable insights into how gender and age influence the length of ICU stays, indicating that females may generally experience longer stays than males across the age spectrum, while patients with missing age data may represent a different patient population.
+There is no strong trend indicating that age at admission directly correlates with the length of Stay (Days).
+Gender Difference: Both genders (F and M) show similar distributions of length of Stay (Days) across all ages.
 
 ## 2.4. Exploratory analysis
 
@@ -689,59 +827,37 @@ Overall, this boxplot provides valuable insights into how gender and age influen
 
 ```{r Death Status by Patients Data Exploratory analysis}
 # Perform the statistical tests for both variables
-result_age <- perform_statistical_tests(patients, "EXPIRE_FLAG", "AGE_AT_ADMISSION", "Age")
-result_sex <- perform_statistical_tests(patients, "EXPIRE_FLAG", "GENDER", "Gender")
+result_age <- perform_statistical_tests(patients_death_status, "SURVIVAL_FLAG", "AGE_AT_ADMISSION", "Age")
+result_sex <- perform_statistical_tests(patients_death_status, "SURVIVAL_FLAG", "GENDER", "Gender")
 
 # Merge the results
 merged_results <- bind_rows(result_age, result_sex)
 
 print(merged_results)
+
+rm(patients_death_status, result_age, result_sex, merged_results)
 ```
 
-Both **Age and Gender** show highly significant associations with death status (EXPIRE_FLAG), suggesting they are both important variables in explaining survival outcomes in this dataset.
+*Age:* The Mann-Whitney U Test result (< 0.0001) indicates a significant difference in death status based on age.
+*Gender:* The Chi-Squared Test result (0.0005) shows a significant association between gender and death status.
+
+Both **Age and Gender** show highly significant associations with death status (SURVIVAL_FLAG), suggesting they are both important variables in explaining survival outcomes in this dataset.
 
 ### 2.4.2. Outcome 2: Length of Survival by Patients Data
 
 ```{r Length of Survival by Patients DataExploratory analysis}
-patients_admissions <- admissions_outcome %>%
-  left_join(patients, by = "SUBJECT_ID") %>%
-  select(SUBJECT_ID, SURVIVAL, EXPIRE_FLAG, AGE_AT_ADMISSION, GENDER) %>%
+patients_survival_outcome <- patients_survival_outcome %>%
   mutate(
-    EXPIRE_FLAG = as.numeric(as.character(EXPIRE_FLAG))  # Ensure EXPIRE_FLAG is numeric
+    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
   )
-
+  
 # Generate Kaplan-Meier survival curve by GENDER
-fit_gender <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ GENDER, data = patients_admissions)
+fit_gender <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ GENDER, data = patients_survival_outcome)
 
 # Plot the Kaplan-Meier curve
 ggsurvplot(
   fit_gender,
-  data = patients_admissions,
-  pval = TRUE,  # Display p-value for gender
-  conf.int = TRUE,  # Add confidence intervals
-  ggtheme = theme_custom,
-  surv.median.line = "hv",
-  legend.title = "Gender",
-  title = "Survival Curve by Gender",
-  palette =  color_palette
-)
-
-# Create age groups based on AGE_AT_ADMISSION
-patients_admissions <- patients_admissions %>%
-  mutate(
-    AGE_GROUP = cut(AGE_AT_ADMISSION,
-                    breaks = c(0, 18, 40, 60, 100), 
-                    labels = c("0-18", "19-40", "41-60", "61+"),
-                    right = FALSE)  # Include the left boundary in each group
-  )
-
-# Fit the Kaplan-Meier survival curve by age group
-fit_age_group <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ AGE_GROUP, data = patients_admissions)
-
-# Plot the Kaplan-Meier curve for the age groups
-ggsurvplot(
-  fit_age_group,
-  data = patients_admissions,
+  data = patients_survival_outcome,
   pval = TRUE,  # Display p-value for age groups
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
@@ -751,34 +867,76 @@ ggsurvplot(
   palette = color_palette
 )
 
-hr_table <- HR_assessment("SURVIVAL", "EXPIRE_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_admissions)
+# Create age groups based on AGE_AT_ADMISSION
+patients_survival_outcome <- patients_survival_outcome %>%
+  mutate(
+    AGE_GROUP = cut(AGE_AT_ADMISSION,
+                    breaks = c(0, 18, 40, 60, 100), 
+                    labels = c("0-18", "19-40", "41-60", "61+"),
+                    right = FALSE)  # Include the left boundary in each group
+  )
+
+# Fit the Kaplan-Meier survival curve by age group
+fit_age_group <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ AGE_GROUP, data = patients_survival_outcome)
+
+# Plot the Kaplan-Meier curve for the age groups
+ggsurvplot(
+  fit_age_group,
+  data = patients_survival_outcome,
+  pval = TRUE,  # Display p-value for age groups
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Age Group",
+  title = "Survival Curve by Age Group",
+  palette = color_palette
+)
+
+hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_survival_outcome)
 
 print(hr_table)
 
+rm(hr_table, fit_age_group, fit_gender, patients_survival_outcome)
 ```
 
-**GENDER:** There is no statistically significant effect of gender on survival in data. The p-value for gender is above the typical threshold of 0.05, and the confidence interval includes 1, indicating no strong evidence of an association.
+*Age at Admission:* This factor has a strong and highly significant association with mortality (p < 0.0001). Its hazard ratio (HR = 1.026) indicates that the risk of death increases with age, making it a crucial variable for predictive models.
 
-**AGE_AT_ADMISSION:** Age is a significant predictor of survival. The positive hazard ratio of 1.04 means that older patients are at a slightly higher risk of the event (death, etc.), and this result is statistically significant (p-value < 0.0001).
+*Gender:* Although statistically significant (p = 0.0128), the hazard ratio (HR = 0.935) suggests a small effect size. You could include gender in the model, especially if other analyses or prior knowledge suggest its importance as a confounder or interacting variable.
 
 ### 2.4.3. Outcome 3: Length of ICU Stay by Patients Data
 
 ``` {r Length of ICU Stay by Patients Data}
-result_age <- analyze_predictor_LOS(combined_data_los_patients, predictor = "AGE_AT_ADMISSION", LOS = "LOS", patient_id = "SUBJECT_ID")
-result_sex <- analyze_predictor_LOS(combined_data_los_patients, predictor = "GENDER", LOS = "LOS", patient_id = "SUBJECT_ID")
+
+result_age <- analyze_predictor_LOS(patients_los_outcome, predictor = "AGE_AT_ADMISSION", LOS = "LOS", patient_id = "SUBJECT_ID")
+result_sex <- analyze_predictor_LOS(patients_los_outcome, predictor = "GENDER", LOS = "LOS", patient_id = "SUBJECT_ID")
 
 # Merge the results
 merged_results <- bind_rows(result_age, result_sex)
 print(merged_results)
 
+rm(patients, merged_results, result_age, result_sex, patients_los_outcome)
 ```
+
+*Age at Admission:*
+
+- The mixed-effects linear model indicates a significant association between Age at Admission and Length of Stay in ICU (p < 0.0001).
+- The positive coefficient (Statistic = 0.0053) suggests that older patients tend to have slightly longer ICU stays.
+
+*Gender:*
+
+- The model does not show a significant association between Gender and Length of Stay in ICU (p = 0.6624).
+- This indicates that gender is unlikely to influence ICU stay duration in this dataset.
 
 # 3. Admissions Data
 
 ## 3.1. Read and Prepare Data
 
 ```{r read file}
-skimr::skim(admissions)
+skimr::skim(admissions %>%
+              select(-HADM_ID, -SUBJECT_ID, -SUBJECT_ID_COMPOSE) %>%
+            mutate(
+              SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+            ))
 ```
 
 ## 3.2. Desriptive statistics
@@ -811,20 +969,19 @@ admissions %>%
 ### 3.3.1. Outcome 1: Death Status by Admissions Data
 
 ```{r death status by admissions data}
-patients_admissions <- patients %>%
-  left_join(admissions, by = "SUBJECT_ID")
+admissions_death_outcome <- admissions %>%
+  select(SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY)
 
 # Prepare the data for plotting
-patients_admissions_long <- patients_admissions %>%
-  select(EXPIRE_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
-  pivot_longer(cols = -EXPIRE_FLAG, names_to = "Variable", values_to = "Value")
+admissions_death_outcome_long <- admissions_death_outcome %>%
+  pivot_longer(cols = -SURVIVAL_FLAG, names_to = "Variable", values_to = "Value")
 
 # List of categorical variables to plot
 categorical_vars <- c("ADMISSION_TYPE", "INSURANCE", "RELIGION", "MARITAL_STATUS", "ETHNICITY")
 
 # Loop through each variable and create a bar plot
 for (var in categorical_vars) {
-  p <- ggplot(patients_admissions_long[patients_admissions_long$Variable == var, ], aes(x = Value, fill = EXPIRE_FLAG)) +
+  p <- ggplot(admissions_death_outcome_long[admissions_death_outcome_long$Variable == var, ], aes(x = Value, fill = as.factor(SURVIVAL_FLAG))) +
     geom_bar(position = "dodge2", color = "black") +
     geom_text(stat = "count", aes(label = after_stat(count)), 
               position = position_dodge(width = 0.9), 
@@ -835,81 +992,40 @@ for (var in categorical_vars) {
          fill = "Death Status") +
     theme_custom +
     theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
-    scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG))), labels = c("0" = "Not Dead", "1" = "Dead"))
+    scale_fill_manual(values = sample(color_palette, size = length(unique(admissions$SURVIVAL_FLAG))), labels = c("0" = "Survived", "1" = "Died"))
   
   # Print or save the plot
   print(p)
 }
+
+rm(p, categorical_vars, admissions_death_outcome_long)
 
 ```
 
 ### 3.3.2. Outcome 2: Length of Survival by Admissions Data
 
 ``` {r Outcome 2: Length of Survival by Admissions Data visualisation}
-
-admissions_clean <- admissions_outcome %>%
-  left_join(admissions, by = c("SUBJECT_ID", "SURVIVAL"))
-
-# Plot 1: ADMISSION_TYPE
-plot_admission <- ggplot(admissions_clean, aes(x = ADMISSION_TYPE, y = SURVIVAL, fill = ADMISSION_TYPE)) +
-  geom_boxplot() +
-  labs(title = "Survival by Admission Type",
-       x = "Admission Type",
-       y = "Survival (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$ADMISSION_TYPE)))) +
-  theme_custom
-
-# Plot 2: INSURANCE
-plot_insurance <- ggplot(admissions_clean, aes(x = INSURANCE, y = SURVIVAL, fill = INSURANCE)) +
-  geom_boxplot() +
-  labs(title = "Survival by Insurance Type",
-       x = "Insurance",
-       y = "Survival (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$INSURANCE)))) +
-  theme_custom
-
-# Plot 3: MARITAL_STATUS
-plot_marital_status <- ggplot(admissions_clean, aes(x = MARITAL_STATUS, y = SURVIVAL, fill = MARITAL_STATUS)) +
-  geom_boxplot() +
-  labs(title = "Survival by Marital Status",
-       x = "Marital Status",
-       y = "Survival (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$MARITAL_STATUS)))) +
-  theme_custom
-
-# Plot 4: ETHNICITY
-plot_ethnicity <- ggplot(admissions_clean, aes(x = ETHNICITY, y = SURVIVAL, fill = ETHNICITY)) +
-  geom_boxplot() +
-  labs(title = "Survival by Ethnicity",
-       x = "Ethnicity",
-       y = "Survival (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$ETHNICITY)))) +
-  theme_custom
-
-# Plot 5: RELIGION
-plot_religion <- ggplot(admissions_clean, aes(x = RELIGION, y = SURVIVAL, fill = RELIGION)) +
-  geom_boxplot() +
-  labs(title = "Survival by Religion",
-       x = "Religion",
-       y = "Survival (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(admissions_clean$RELIGION)))) +
-  theme_custom
+admissions_survival_outcome <- admissions %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
+  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))
 
 # Function to create the plot
-create_admission_plot <- function(data, x_var, color_palette, theme_custom) {
-  ggplot(data, aes_string(x = x_var, y = "SURVIVAL", fill = x_var, color = x_var)) +
-    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-    geom_jitter(width = 0.2, alpha = 0.5, fill = "white", shape = 21, size = 2, stroke = 0.5) +
+create_admission_plot <- function(data, x_var, color_var, color_palette, theme_custom) {
+  ggplot(data, aes_string(x = x_var, y = "SURVIVAL", fill = x_var, color = color_var)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.2, alpha = 0.7, fill = "white", shape = 21, size = 2, stroke = 0.5) +
     theme_custom +
-    scale_fill_manual(values = color_palette) +  # Color for boxplot fill
-    scale_color_manual(values = color_palette) + # Color for jitter points
+    scale_fill_manual(values = color_palette) +
+    scale_color_manual(values = c("black", "blue")) +
     labs(
       title = paste("Time to Death by", x_var),
-      y = "Time to Death (Days)", x = x_var
+      y = "Time to Death (Days)", x = x_var,
+      color = "Survival Status"  # Add legend label
     ) +
     theme(
-      legend.position = "none",
-      strip.text = element_text(size = 12, face = "bold")
+      legend.position = "right",  # Show the legend for SURVIVAL_FLAG
+      strip.text = element_text(size = 12, face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels
     )
 }
 
@@ -918,7 +1034,7 @@ admission_vars <- c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "ETHNICITY"
 
 # Create a list to store the plots
 plots <- lapply(admission_vars, function(var) {
-  create_admission_plot(admissions_clean, var, color_palette, theme_custom)
+  create_admission_plot(admissions_survival_outcome, var, "SURVIVAL_FLAG", color_palette, theme_custom)
 })
 
 # Name the plots for easy reference
@@ -928,140 +1044,100 @@ for (var_name in names(plots)) {
   print(plots[[var_name]])
 }
 
+rm(plots, admission_vars, create_admission_plot, var_name, var)
 ``` 
 
 ### 3.3.3. Outcome 3: Length of ICU Stay by Admissions Data
 
 ``` {r Outcome 3: Length of ICU Stay by Admissions Data visualisation}
-
 # Clean and prepare the data
-combined_data_los_admissions <- admissions %>%
-  left_join(icu_stays_outcome, by = c("SUBJECT_ID", "HADM_ID"))
-
-# ADMISSION_TYPE
-plot_admission_icu <- ggplot(combined_data_los_admissions, aes(x = ADMISSION_TYPE, y = LOS, fill = ADMISSION_TYPE)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2, alpha = 0.5, color = "black") +
-  labs(title = "Length of ICU Stay by Admission Type",
-       x = "Admission Type",
-       y = "Length of ICU Stay (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(combined_data_los_admissions$ADMISSION_TYPE)))) +
-  theme_custom
-
-# Plot 2: INSURANCE
-plot_insurance_icu <- ggplot(combined_data_los_admissions, aes(x = INSURANCE, y = LOS, fill = INSURANCE)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2, alpha = 0.5, fill = "white", shape = 21, size = 2, stroke = 0.5) +
-  labs(title = "Length of ICU Stay by Insurance Type",
-       x = "Insurance Type",
-       y = "Length of ICU Stay (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(combined_data_los_admissions$INSURANCE)))) +
-  theme_custom
-
-# Plot 3: MARITAL_STATUS
-plot_marital_status_icu <- ggplot(combined_data_los_admissions, aes(x = MARITAL_STATUS, y = LOS, fill = MARITAL_STATUS)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2, alpha = 0.5, color = "black") +
-  labs(title = "Length of ICU Stay by Marital Status",
-       x = "Marital Status",
-       y = "Length of ICU Stay (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(combined_data_los_admissions$MARITAL_STATUS)))) +
-  theme_custom
-
-# Plot 4: ETHNICITY
-plot_ethnicity_icu <- ggplot(combined_data_los_admissions, aes(x = ETHNICITY, y = LOS, fill = ETHNICITY)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2, alpha = 0.5, color = "black") +
-  labs(title = "Length of ICU Stay by Ethnicity",
-       x = "Ethnicity",
-       y = "Length of ICU Stay (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(combined_data_los_admissions$ETHNICITY)))) +
-  theme_custom
-
-# Plot 5: RELIGION
-plot_religion_icu <- ggplot(combined_data_los_admissions, aes(x = RELIGION, y = LOS, fill = RELIGION)) +
-  geom_boxplot(outlier.shape = NA) +
-  geom_jitter(width = 0.2, alpha = 0.5, color = "black") +
-  labs(title = "Length of ICU Stay by Religion",
-       x = "Religion",
-       y = "Length of ICU Stay (Days)") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(combined_data_los_admissions$RELIGION)))) +
-  theme_custom
+admissions_los_outcome <- admissions %>%
+  left_join(LOS_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, LOS) %>%
+  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))
 
 # Function to create the plot
-create_icu_plot <- function(data, x_var, color_palette, theme_custom) {
-  ggplot(data, aes_string(x = x_var, y = "LOS", fill = x_var, color = x_var)) +
-    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
-    geom_jitter(width = 0.2, alpha = 0.5, fill = "white", shape = 21, size = 2, stroke = 0.5) +
+create_LOS_plot <- function(data, x_var, color_var, color_palette, theme_custom) {
+  ggplot(data, aes_string(x = x_var, y = "LOS", fill = x_var, color = color_var)) +
+    geom_boxplot(outlier.shape = NA) +
+    geom_jitter(width = 0.2, alpha = 0.4, fill = "white", shape = 21, size = 2, stroke = 0.5) +
     theme_custom +
-    scale_fill_manual(values = color_palette) +  # Color for boxplot fill
-    scale_color_manual(values = color_palette) + # Color for jitter points
+    scale_fill_manual(values = color_palette) +
+    scale_color_manual(values = c("black", "blue")) +
     labs(
       title = paste("Length of ICU Stay by", x_var),
-      y = "Length of ICU Stay (Days)", x = x_var
+      y = "Length of ICU Stay (Days)", x = x_var,
+      color = "Survival Status"  # Add legend label
     ) +
     theme(
-      legend.position = "none",
-      strip.text = element_text(size = 12, face = "bold")
+      legend.position = "right",  # Show the legend for SURVIVAL_FLAG
+      strip.text = element_text(size = 12, face = "bold"),
+      axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels
     )
 }
 
-# Define the ICU variables
-icu_vars <- c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "ETHNICITY", "RELIGION")
+# Define the admission variables
+admission_vars <- c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "ETHNICITY", "RELIGION")
 
-# Create a list to store the ICU plots
-icu_plots <- lapply(icu_vars, function(var) {
-  create_icu_plot(combined_data_los_admissions, var, color_palette, theme_custom)
+# Create a list to store the plots
+plots <- lapply(admission_vars, function(var) {
+  create_LOS_plot(admissions_los_outcome, var, "SURVIVAL_FLAG", color_palette, theme_custom)
 })
 
 # Name the plots for easy reference
-names(icu_plots) <- icu_vars
-for (var_name in names(icu_plots)) {
+names(plots) <- admission_vars
+for (var_name in names(plots)) {
   cat("\nPlot for:", var_name, "\n")  # Print the variable name
-  print(icu_plots[[var_name]])
+  print(plots[[var_name]])
 }
 
-
+rm(plots, admission_vars, create_LOS_plot, var_name, var)
 ```
 
 ## 3.4. Exploratory analysis
 ### 3.4.1. Outcome 1: Death Status by Admissions Data
 
 ```{r Death Status by Admissions Data }
-patients_admissions <- admissions_clean %>%
-  left_join(patients, by = "SUBJECT_ID") %>%
-  select(SUBJECT_ID, SURVIVAL, EXPIRE_FLAG, ADMISSION_TYPE, INSURANCE, MARITAL_STATUS, RELIGION, ETHNICITY ) %>%
+admissions_death_outcome <- admissions_death_outcome %>%
   mutate(
-    EXPIRE_FLAG = as.numeric(as.character(EXPIRE_FLAG))  # Ensure EXPIRE_FLAG is numeric
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG))  # Ensure EXPIRE_FLAG is numeric
   )
 
 # Perform the statistical tests for both variables
-patients_admissions$ADMISSION_TYPE <- droplevels(patients_admissions$ADMISSION_TYPE)
+admissions_death_outcome$ADMISSION_TYPE <- droplevels(admissions_death_outcome$ADMISSION_TYPE)
 
-result_ADMISSION_TYPE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
-result_INSURANCE <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "INSURANCE", "INSURANCE")
-result_RELIGION <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "RELIGION", "RELIGION")
-result_MARITAL_STATUS <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "MARITAL_STATUS", "MARITAL STATUS")
-result_ETHNICITY <- perform_statistical_tests(patients_admissions, "EXPIRE_FLAG", "ETHNICITY", "ETHNICITY")
+result_ADMISSION_TYPE <- perform_statistical_tests(admissions_death_outcome, "SURVIVAL_FLAG", "ADMISSION_TYPE", "ADMISSION TYPE")
+result_INSURANCE <- perform_statistical_tests(admissions_death_outcome, "SURVIVAL_FLAG", "INSURANCE", "INSURANCE")
+result_RELIGION <- perform_statistical_tests(admissions_death_outcome, "SURVIVAL_FLAG", "RELIGION", "RELIGION")
+result_MARITAL_STATUS <- perform_statistical_tests(admissions_death_outcome, "SURVIVAL_FLAG", "MARITAL_STATUS", "MARITAL STATUS")
+result_ETHNICITY <- perform_statistical_tests(admissions_death_outcome, "SURVIVAL_FLAG", "ETHNICITY", "ETHNICITY")
 
 # Merge the results
 merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
 
 print(merged_results)
 
+rm(result_ADMISSION_TYPE, result_ETHNICITY, result_INSURANCE, result_MARITAL_STATUS, result_RELIGION, merged_results, admissions_death_outcome)
+
 ```
 
 ### 3.4.2. Outcome 2: Length of Survival by Admissions Data
 
 ```{r Length of Survival by Admissions Data exploratory analysis}
+admissions_survival_outcome <- admissions_survival_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG))  # Ensure EXPIRE_FLAG is numeric
+  )
+
+admissions_survival_outcome$ADMISSION_TYPE <- droplevels(admissions_survival_outcome$ADMISSION_TYPE)
 
 # Generate Kaplan-Meier survival curve by GENDER
-fit_admission_type <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ ADMISSION_TYPE, data = patients_admissions)
+fit_admission_type <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ ADMISSION_TYPE, data = admissions_survival_outcome)
 
 # Plot the Kaplan-Meier curve
 ggsurvplot(
   fit_admission_type,
-  data = patients_admissions,
+  data = admissions_survival_outcome,
   pval = TRUE,  # Display p-value for gender
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
@@ -1072,13 +1148,12 @@ ggsurvplot(
 )
 
 # Generate Kaplan-Meier survival curve by GENDER
-fit_insurance <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ INSURANCE, data = patients_admissions)
-
+fit_insurance <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ INSURANCE, data = admissions_survival_outcome)
 
 # Plot the Kaplan-Meier curve 
 ggsurvplot(
   fit_insurance,
-  data = patients_admissions,
+  data = admissions_survival_outcome,
   pval = TRUE,  # Display p-value for age groups
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
@@ -1089,12 +1164,12 @@ ggsurvplot(
 )
 
 # Fit Kaplan-Meier model
-fit_religion <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ RELIGION, data = patients_admissions)
+fit_religion <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ RELIGION, data = admissions_survival_outcome)
 
 # Plot the Kaplan-Meier curve
 ggsurvplot(
   fit_religion,
-  data = patients_admissions,
+  data = admissions_survival_outcome,
   pval = TRUE,  # Display p-value
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
@@ -1105,12 +1180,12 @@ ggsurvplot(
 )
 
 # Fit Kaplan-Meier model
-fit_marital_status <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ MARITAL_STATUS, data = patients_admissions)
+fit_marital_status <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ MARITAL_STATUS, data = admissions_survival_outcome)
 
 # Plot the Kaplan-Meier curve
 ggsurvplot(
   fit_marital_status,
-  data = patients_admissions,
+  data = admissions_survival_outcome,
   pval = TRUE,  # Display p-value
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
@@ -1121,12 +1196,12 @@ ggsurvplot(
 )
 
 # Fit Kaplan-Meier model
-fit_ethnicity <- survfit(Surv(SURVIVAL, EXPIRE_FLAG) ~ ETHNICITY, data = patients_admissions)
+fit_ethnicity <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ ETHNICITY, data = admissions_survival_outcome)
 
 # Plot the Kaplan-Meier curve
 ggsurvplot(
   fit_ethnicity,
-  data = patients_admissions,
+  data = admissions_survival_outcome,
   pval = TRUE,  # Display p-value
   conf.int = TRUE,  # Add confidence intervals
   ggtheme = theme_custom,
@@ -1136,26 +1211,34 @@ ggsurvplot(
   palette = color_palette
 )
 
-hr_table <- HR_assessment("SURVIVAL", "EXPIRE_FLAG", c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "RELIGION", "ETHNICITY"), patients_admissions)
+hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "RELIGION", "ETHNICITY"), admissions_survival_outcome)
 
 print(hr_table)
+
+rm(admissions_survival_outcome, hr_table, fit_religion, fit_admission_type, fit_ethnicity, fit_insurance, fit_marital_status)
 
 ```
 
 ### 3.4.3. Outcome 3: Length of ICU Stay by Admissions Data
 
 ``` {r Length of ICU Stay by Admission Data}
-
-result_ADMISSION_TYPE <- analyze_predictor_LOS(combined_data_los_admissions, predictor = "ADMISSION_TYPE", LOS = "LOS", patient_id = "SUBJECT_ID")
-result_INSURANCE <- analyze_predictor_LOS(combined_data_los_admissions, predictor = "INSURANCE", LOS = "LOS", patient_id = "SUBJECT_ID")
-result_RELIGION <- analyze_predictor_LOS(combined_data_los_admissions, predictor = "RELIGION", LOS = "LOS", patient_id = "SUBJECT_ID")
-result_MARITAL_STATUS <- analyze_predictor_LOS(combined_data_los_admissions, predictor = "MARITAL_STATUS", LOS = "LOS", patient_id = "SUBJECT_ID")
-result_ETHNICITY <- analyze_predictor_LOS(combined_data_los_admissions, predictor = "ETHNICITY", LOS = "LOS", patient_id = "SUBJECT_ID")
+admissions_los_outcome <- admissions_los_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG))
+  )
+  
+result_ADMISSION_TYPE <- analyze_predictor_LOS(admissions_los_outcome, predictor = "ADMISSION_TYPE", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_INSURANCE <- analyze_predictor_LOS(admissions_los_outcome, predictor = "INSURANCE", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_RELIGION <- analyze_predictor_LOS(admissions_los_outcome, predictor = "RELIGION", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_MARITAL_STATUS <- analyze_predictor_LOS(admissions_los_outcome, predictor = "MARITAL_STATUS", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_ETHNICITY <- analyze_predictor_LOS(admissions_los_outcome, predictor = "ETHNICITY", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
 
 # Merge the results
 merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
 
 print(merged_results)
+
+rm(admissions, admissions_los_outcome, merged_results, result_RELIGION, result_MARITAL_STATUS, result_ADMISSION_TYPE, result_INSURANCE, result_ETHNICITY)
 ```
 
 # 4.   Diagnoses Data
@@ -1168,7 +1251,7 @@ diagnoses <- read.csv("../data/raw/cleaned/DIAGNOSES_ICD_clean.csv", stringsAsFa
   mutate(SUBJECT_ID = as.factor(SUBJECT_ID))
 
 skimr::skim(diagnoses %>%
-              select(-SUBJECT_ID, -ROW_ID))
+              select(-SUBJECT_ID, -SUBJECT_ID_COMPOSE, -ROW_ID))
 ```
 
 ## 4.2.   Descriptive Statistics
@@ -1177,7 +1260,7 @@ skimr::skim(diagnoses %>%
 ```{r descriptive statistics for numerical vars (Diagnoses)}
 # Summarize the statistics for each numeric variable
 diagnoses %>%
-  select(SUBJECT_ID, DIAGNOSES_NUM) %>%
+  select(SUBJECT_ID_COMPOSE, DIAGNOSES_NUM) %>%
   distinct() %>% # one number for 1 patient
   select(DIAGNOSES_NUM) %>%
   summarise(across(everything(), statistics)) %>%
@@ -1227,26 +1310,27 @@ high_priority <- diagnoses %>%
   count(LONG_TITLE, sort = TRUE) %>%
   mutate(Percentage = n / sum(n) * 100,
          Cumulative_Percentage = cumsum(Percentage)) %>%
-  filter(Cumulative_Percentage <= 30) # Keep diagnoses contributing to top 30%
+  filter(Cumulative_Percentage <= 35) # Keep diagnoses contributing to top 30%
 
 ggplot(high_priority, aes(x = reorder(LONG_TITLE, -n), y = n)) +
   geom_bar(stat = "identity", fill = color_palette[6], color = "black") +
-  geom_text(aes(label = n), vjust = 1.3, size = 3) +
-  labs(title = "High-Priority Diagnoses (contributing to top 30%)",
+  geom_text(aes(label = n), hjust = 1.2, size = 3) +
+  labs(title = "High-Priority Diagnoses (contributing to top 35%)",
        x = "ICD9 Code",
        y = "Frequency") +
   theme_custom +
+  coord_flip() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 # Visualize how many diagnoses (DIAGNOSES_NUM unique number for each patients) has patients who died and who not 
 
-diagnoses_death_outcome <- patients %>%
-  left_join(diagnoses, by = "SUBJECT_ID") %>%
-  select(SUBJECT_ID, EXPIRE_FLAG, LONG_TITLE, SEQ_NUM, DIAGNOSES_NUM)
+diagnoses_death_outcome <- Death_status_outcome %>%
+  left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, LONG_TITLE, SEQ_NUM, DIAGNOSES_NUM)
 
 # Simplified dataset: Ensure DIAGNOSES_NUM is directly used
 diagnoses_death_summary <- diagnoses_death_outcome %>%
-  group_by(EXPIRE_FLAG) %>%
+  group_by(SURVIVAL_FLAG) %>%
   summarise(
     Mean_Diagnoses = mean(DIAGNOSES_NUM, na.rm = TRUE),
     Median_Diagnoses = median(DIAGNOSES_NUM, na.rm = TRUE),
@@ -1255,16 +1339,18 @@ diagnoses_death_summary <- diagnoses_death_outcome %>%
   )
 
 # Bar plot: Average number of diagnoses by death status
-ggplot(diagnoses_death_summary, aes(x = factor(EXPIRE_FLAG), y = Mean_Diagnoses, fill = factor(EXPIRE_FLAG))) +
+ggplot(diagnoses_death_summary, aes(x = factor(SURVIVAL_FLAG), y = Mean_Diagnoses, fill = factor(SURVIVAL_FLAG))) +
   geom_bar(stat = "identity", position = "dodge", width = 0.6, color = "black") +
   geom_text(aes(label = round(Mean_Diagnoses, 1)), vjust = -0.5, size = 3) +
   labs(title = "Mean Number of Diagnoses by Death Status",
        x = "Death Status (0 = Survived, 1 = Died)",
        y = "Mean Number of Diagnoses",
        fill = "Death Status") +
-  scale_fill_manual(values = sample(color_palette, size = length(unique(patients$EXPIRE_FLAG)), replace = FALSE), labels = c("0" = "Not Dead", "1" = "Dead")) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(diagnoses_death_summary$SURVIVAL_FLAG)), replace = FALSE), labels = c("0" = "Not Dead", "1" = "Dead")) +
   theme_custom +
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5))
+
+rm(high_priority, diagnoses_death_summary)
 ```
 
 ### 4.3.2. Outcome 2: Length of Survival by Diagnoses
@@ -1276,16 +1362,16 @@ top_diagnoses <- diagnoses %>%
   count(LONG_TITLE, sort = TRUE) %>%
   mutate(Percentage = n / sum(n) * 100,
          Cumulative_Percentage = cumsum(Percentage)) %>%
-  filter(Cumulative_Percentage <= 30) %>%
+  filter(Cumulative_Percentage <= 35) %>%
   select(LONG_TITLE)
 
-# Join with admissions_outcome to retain survival data
-diagnoses_admissions_high_priority <- admissions_outcome %>%
-  left_join(diagnoses, by = "SUBJECT_ID") %>% 
+# Join with survival_outcome to retain survival data
+diagnoses_admissions_high_priority <- Survival_outcome %>%
+  left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>% 
   filter(SEQ_NUM == 1, LONG_TITLE %in% top_diagnoses$LONG_TITLE)
 
 # Plot: High-priority diagnosis by SURVIVAL length
-ggplot(diagnoses_admissions_high_priority, aes(x = LONG_TITLE, y = SURVIVAL, fill = LONG_TITLE, color = LONG_TITLE)) +
+ggplot(diagnoses_admissions_high_priority, aes(x = LONG_TITLE, y = SURVIVAL, fill = LONG_TITLE, color = as.factor(SURVIVAL_FLAG))) +
   geom_boxplot(outlier.shape = NA, alpha = 0.7) +
   geom_jitter(width = 0.2, alpha = 0.5, fill = "white", shape = 21, size = 2, stroke = 0.5) +
   labs(title = "High-Priority Diagnoses by Survival Length",
@@ -1295,17 +1381,17 @@ ggplot(diagnoses_admissions_high_priority, aes(x = LONG_TITLE, y = SURVIVAL, fil
   scale_color_manual(values = color_palette) +
   theme_custom +
   theme(
-    legend.position = "none",,
+    legend.position = "none",
     axis.text.x = element_text(angle = 45, hjust = 1)
     )
 
 # Merge admissions and diagnoses
-diagnoses_admissions_outcome <- admissions_outcome %>%
-  left_join(diagnoses, by = "SUBJECT_ID") %>%
-  select(SUBJECT_ID, SURVIVAL, LONG_TITLE, SEQ_NUM, DIAGNOSES_NUM)
+diagnoses_survival_outcome <- Survival_outcome %>%
+  left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL, LONG_TITLE, SEQ_NUM, DIAGNOSES_NUM)
 
 # Plot: Average number of diagnoses per patient by survival length
-diagnoses_admissions_outcome %>%
+diagnoses_survival_outcome %>%
   group_by(SURVIVAL) %>%
   summarise(Average_Diagnoses = mean(DIAGNOSES_NUM, na.rm = TRUE), .groups = "drop") %>%
   ggplot(aes(x = SURVIVAL, y = Average_Diagnoses)) +
@@ -1317,7 +1403,67 @@ diagnoses_admissions_outcome %>%
     x = "Survival Length (Days)",
     y = "Average Number of Diagnoses"
   ) +
-  scale_x_continuous(limits = c(0, max(diagnoses_admissions_outcome$SURVIVAL, na.rm = TRUE)), expand = c(0, 0)) + 
+  scale_x_continuous(limits = c(0, max(diagnoses_survival_outcome$SURVIVAL, na.rm = TRUE)), expand = c(0, 0)) + 
+  scale_y_continuous(expand = c(0, 0)) + 
+  theme_custom +
+  theme(
+    panel.grid.major = element_line(color = "grey40", size = 0.5),  # Add gridlines
+    panel.grid.minor = element_line(color = "grey95", size = 0.25)
+  )
+
+rm(top_diagnoses, diagnoses_admissions_high_priority)
+
+```
+
+### 4.4.3. Outcome 3: Length of ICU Stay by Diagnoses
+
+```{r Length of ICU Stay by Diagnoses Exploratory Analysis}
+# Extract top diagnoses based on frequency
+top_diagnoses_los <- diagnoses %>%
+  filter(SEQ_NUM == 1) %>%
+  count(LONG_TITLE, sort = TRUE) %>%
+  mutate(Percentage = n / sum(n) * 100,
+         Cumulative_Percentage = cumsum(Percentage)) %>%
+  filter(Cumulative_Percentage <= 35) %>%  # Adjust the threshold if necessary
+  select(LONG_TITLE)
+
+# Merge with LOS outcome data
+diagnoses_los_outcome <- LOS_outcome %>%
+  left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>% 
+  filter(SEQ_NUM == 1, LONG_TITLE %in% top_diagnoses_los$LONG_TITLE)
+
+ggplot(diagnoses_los_outcome, aes(x = LONG_TITLE, y = LOS, fill = LONG_TITLE, color = LONG_TITLE)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  geom_jitter(width = 0.2, alpha = 0.5, fill = "white", shape = 21, size = 2, stroke = 0.5) +
+  labs(title = "High-Priority Diagnoses by Length of ICU Stay",
+       x = "High-Priority Diagnosis",
+       y = "Length of ICU Stay (Days)") +
+  scale_fill_manual(values = color_palette) +
+  scale_color_manual(values = color_palette) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+diagnoses_los_outcome <- LOS_outcome %>%
+  left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, LOS, LONG_TITLE, SEQ_NUM, DIAGNOSES_NUM)
+
+# Plot: Average number of diagnoses per patient by LOS
+diagnoses_los_outcome %>%
+  group_by(LOS) %>%
+  summarise(Average_Diagnoses = mean(DIAGNOSES_NUM, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = LOS, y = Average_Diagnoses)) +
+  geom_line(color = color_palette[10], size = 1.2) +  # Line for trend
+  geom_point(color = color_palette[22], fill = "white", shape = 21, size = 2, stroke = 0.5) +  # Dots with outline
+  geom_smooth(method = "loess", color = "darkblue", fill = "blue", alpha = 0.2, size = 1, se = TRUE) +  # LOESS smooth trend
+  labs(
+    title = "Average Number of Diagnoses by Length of ICU Stay",
+    x = "Length of ICU Stay (Days)",
+    y = "Average Number of Diagnoses"
+  ) +
+  scale_x_continuous(limits = c(0, max(diagnoses_los_outcome$LOS, na.rm = TRUE)), expand = c(0, 0)) + 
   scale_y_continuous(expand = c(0, 0)) + 
   theme_custom +
   theme(
@@ -1332,17 +1478,85 @@ diagnoses_admissions_outcome %>%
 
 ``` {r Death Status by Diagnoses exploratory analysis}
 diagnoses_death_outcome$LONG_TITLE <- droplevels(diagnoses_death_outcome$LONG_TITLE)
-result_diagnoses_num <- perform_statistical_tests(diagnoses_death_outcome, "EXPIRE_FLAG", "DIAGNOSES_NUM", "Diagnoses number")
 
-result_all_diagnosis <- perform_statistical_tests(diagnoses_death_outcome, "EXPIRE_FLAG", "LONG_TITLE", "Diagnosis")
+result_diagnoses_num <- perform_statistical_tests(diagnoses_death_outcome, "SURVIVAL_FLAG", "DIAGNOSES_NUM", "Diagnoses number")
+
+result_all_diagnosis <- perform_statistical_tests(diagnoses_death_outcome, "SURVIVAL_FLAG", "LONG_TITLE", "Diagnosis")
 
 high_priority <- diagnoses_death_outcome %>%
   filter(SEQ_NUM == 1)
 
-result_high_priority <- perform_statistical_tests(high_priority, "EXPIRE_FLAG", "LONG_TITLE", "Key Diagnosis")
+result_high_priority <- perform_statistical_tests(high_priority, "SURVIVAL_FLAG", "LONG_TITLE", "Key Diagnosis")
 
 merged_results <- bind_rows(result_diagnoses_num, result_all_diagnosis, result_high_priority)
 
 print(merged_results)
+
+rm(result_diagnoses_num, result_all_diagnosis, high_priority, result_high_priority)
+```
+
+### 4.4.2. Outcome 2: Length of Survival by Diagnoses
+
+```{r Length of Survival by Diagnoses Exploratory analysis}
+diagnoses_survival_outcome <- Survival_outcome %>%
+  left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, DIAGNOSES_NUM, LONG_TITLE, SEQ_NUM) %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG)) 
+  )
+
+# Create number of diagnoses ranges based on AGE_AT_ADMISSION
+diagnoses_survival_numbers <- diagnoses_survival_outcome %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, DIAGNOSES_NUM) %>%
+  distinct() %>%
+  mutate(
+    DIAGNOSES_NUM = cut(DIAGNOSES_NUM,
+                    breaks = c(0, 1, 3, 5, 10, 40),  # Include 0-1 as the first interval
+                    labels = c("1", "1-3", "3-5", "6-10", ">10"),  # Five intervals
+                    right = FALSE)  # Include the left boundary in each group
+  )
+
+# Generate Kaplan-Meier survival curve by GENDER
+fit_diagnoses_num <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ DIAGNOSES_NUM, data = diagnoses_survival_numbers)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_diagnoses_num,
+  data = diagnoses_survival_outcome,
+  pval = TRUE,  # Display p-value for gender
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Number of Diagnoses",
+  title = "Survival Curve by Y",
+  palette =  color_palette
+)
+
+hr_table_number_diagnoses <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "DIAGNOSES_NUM", diagnoses_survival_numbers)
+
+print(hr_table_number_diagnoses)
+
+rm(diagnoses_survival_outcome, diagnoses_survival_numbers, fit_diagnoses_num, hr_table_number_diagnoses)
+
+```
+
+### 4.4.3. Outcome 3: Length of ICU Stay by Diagnoses
+
+``` {r Length of ICU Stay by Admission Data}
+diagnoses_LOS_numbers <- diagnoses_los_outcome %>%
+  select(SUBJECT_ID_COMPOSE, LOS, DIAGNOSES_NUM) %>%
+  distinct() %>%
+  mutate(
+    DIAGNOSES_NUM = cut(DIAGNOSES_NUM,
+                    breaks = c(0, 1, 3, 5, 10, 40),  # Include 0-1 as the first interval
+                    labels = c("1", "1-3", "3-5", "6-10", ">10"),  # Five intervals
+                    right = FALSE)  # Include the left boundary in each group
+  )
+
+result_diagnoses_num <- analyze_predictor_LOS(diagnoses_LOS_numbers, predictor = "DIAGNOSES_NUM", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+
+print(result_diagnoses_num)
+
+rm(result_diagnoses_num, diagnosis_LOS_numbers, diagnoses_los_outcome)
 ```
 
