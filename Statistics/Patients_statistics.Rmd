@@ -965,7 +965,6 @@ admissions %>%
 ```
 
 ## 3.3. Visualisation Analysis by Outcome
-
 ### 3.3.1. Outcome 1: Death Status by Admissions Data
 
 ```{r death status by admissions data}
@@ -1001,6 +1000,14 @@ for (var in categorical_vars) {
 rm(p, categorical_vars, admissions_death_outcome_long)
 
 ```
+
+*Admission Type:* Emergency admissions are associated with higher mortality, likely reflecting the severity of cases. Elective admissions, often planned and less acute, show lower death rates.
+
+*Insurance:* Patients with Medicare, predominantly older individuals, have higher mortality, emphasizing age and associated comorbidities as risk factors.
+
+*Religion:* Christianity and "Unknown" categories account for the majority of cases. This could reflect demographic prevalence in the population or limitations in data recording.
+
+*Ethnicity:* White ethnicity dominates the data, with a notable survival rate but also the largest death count. Lower representation of other ethnicities may require further investigation for equity in care and outcomes.
 
 ### 3.3.2. Outcome 2: Length of Survival by Admissions Data
 
@@ -1040,12 +1047,14 @@ plots <- lapply(admission_vars, function(var) {
 # Name the plots for easy reference
 names(plots) <- admission_vars
 for (var_name in names(plots)) {
-  cat("\nPlot for:", var_name, "\n")  # Print the variable name
   print(plots[[var_name]])
 }
 
 rm(plots, admission_vars, create_admission_plot, var_name, var)
 ``` 
+
+Across these plots, admission type, insurance, and marital status appear to have significant influence on survival variability. These factors could be explored further in predictive modeling to understand their direct or indirect impact on survival outcomes. Ethnicity and religion may require more robust representation for conclusive insights.
+
 
 ### 3.3.3. Outcome 3: Length of ICU Stay by Admissions Data
 
@@ -1087,12 +1096,13 @@ plots <- lapply(admission_vars, function(var) {
 # Name the plots for easy reference
 names(plots) <- admission_vars
 for (var_name in names(plots)) {
-  cat("\nPlot for:", var_name, "\n")  # Print the variable name
   print(plots[[var_name]])
 }
 
 rm(plots, admission_vars, create_LOS_plot, var_name, var)
 ```
+
+While categorical variables such as admission type, insurance, marital status, ethnicity, and religion show some variability in ICU stays, survival status does not appear to significantly impact the duration within these groups. The most substantial differences are seen in admission type and insurance categories, suggesting these factors could be explored further for ICU resource management or predictive modeling.
 
 ## 3.4. Exploratory analysis
 ### 3.4.1. Outcome 1: Death Status by Admissions Data
@@ -1120,6 +1130,10 @@ print(merged_results)
 rm(result_ADMISSION_TYPE, result_ETHNICITY, result_INSURANCE, result_MARITAL_STATUS, result_RELIGION, merged_results, admissions_death_outcome)
 
 ```
+
+All tested variables—Admission Type, Insurance, Religion, Marital Status, and Ethnicity—demonstrated statistically significant associations with death status in the Chi-Squared tests (p-value = 0.0005). This indicates that these variables may influence the likelihood of survival or death among patients.
+
+Since all variables show significant associations with the outcome (death status), they are strong candidates for inclusion in predictive models for mortality risk.
 
 ### 3.4.2. Outcome 2: Length of Survival by Admissions Data
 
@@ -1219,6 +1233,8 @@ rm(admissions_survival_outcome, hr_table, fit_religion, fit_admission_type, fit_
 
 ```
 
+Variables with significant p-values (< 0.05), such as admission type, insurance type (except Medicaid), marital status, religion, and ethnicity, should be included in survival modeling as they demonstrate a clear relationship with the risk of death.
+
 ### 3.4.3. Outcome 3: Length of ICU Stay by Admissions Data
 
 ``` {r Length of ICU Stay by Admission Data}
@@ -1240,6 +1256,11 @@ print(merged_results)
 
 rm(admissions, admissions_los_outcome, merged_results, result_RELIGION, result_MARITAL_STATUS, result_ADMISSION_TYPE, result_INSURANCE, result_ETHNICITY)
 ```
+
+Significant predictors with p < 0.05, such as:
+- Admission Type (Emergency, Urgent)
+- Insurance (Medicare, Self Pay)
+- Religion (Judaism, Unknown)
 
 # 4.   Diagnoses Data
 ## 4.1.   Read Data
@@ -1353,6 +1374,13 @@ ggplot(diagnoses_death_summary, aes(x = factor(SURVIVAL_FLAG), y = Mean_Diagnose
 rm(high_priority, diagnoses_death_summary)
 ```
 
+The bar chart highlights the most frequently occurring diagnoses contributing to adverse outcomes or higher mortality. The top diagnosis, "Coronary atherosclerosis of native coronary artery," appears 3496 times, indicating a significant health concern.
+
+Other critical conditions such as "Unspecified septicemia" (2064 instances) and "Subendocardial infarction, initial episode of care" (1750 instances) also prominently feature, showing their relevance in critical care settings.
+
+Patients who died had a higher mean number of diagnoses (18.4) compared to those who survived (16.7).
+This indicates a potential association between the complexity of a patient's medical history (measured by the number of diagnoses) and mortality.
+
 ### 4.3.2. Outcome 2: Length of Survival by Diagnoses
 
 ```{r length of survival by diagnoses}
@@ -1415,6 +1443,18 @@ rm(top_diagnoses, diagnoses_admissions_high_priority)
 
 ```
 
+Most diagnoses exhibit a central clustering of survival lengths around the median, indicating a similar distribution of survival days for many conditions.
+
+Some outliers indicate that specific diagnoses could have prolonged or extremely short survival outcomes.
+
+Diagnoses like "Unspecified septicemia" and "Coronary atherosclerosis of native coronary artery" appear frequently and may require further exploration for modeling.
+Average Number of Diagnoses by Survival Length:
+
+There is an observable upward trend, indicating that a higher survival length corresponds with an increased number of diagnoses.
+
+This suggests a potential relationship where prolonged hospital stays or complex medical conditions (resulting in multiple diagnoses) are associated with extended survival durations.
+These insights highlight the importance of including high-priority diagnoses and the number of diagnoses in survival modeling, as they seem to provide significant explanatory value for survival outcomes.
+
 ### 4.4.3. Outcome 3: Length of ICU Stay by Diagnoses
 
 ```{r Length of ICU Stay by Diagnoses Exploratory Analysis}
@@ -1473,6 +1513,14 @@ diagnoses_los_outcome %>%
 
 ```
 
+This visualization indicates the relationship between specific diagnoses and the corresponding length of ICU stay. Diagnoses such as coronary artery diseases and septicemia are associated with longer stays in the ICU. This suggests that patients with these conditions require more intensive care, aligning with their critical nature.
+
+Conclusion: High-priority diagnoses should be considered in ICU resource planning and can be used as predictors in modeling ICU length of stay.
+
+Trend Observation: There is an increasing trend in the average number of diagnoses as the length of ICU stay increases. This suggests that patients who remain in the ICU longer often present with multiple comorbidities or complications requiring further diagnoses.
+
+Conclusion: The average number of diagnoses can be a key factor when modeling ICU stays, as it reflects the complexity of the patient’s medical condition.
+
 ## 4.4. Exploratory analysis
 ### 4.4.1. Outcome 1: Death Status by Diagnoses
 
@@ -1494,6 +1542,8 @@ print(merged_results)
 
 rm(result_diagnoses_num, result_all_diagnosis, high_priority, result_high_priority)
 ```
+
+All three factors are significant predictors and should be integrated into the modeling framework. Their inclusion will enhance the accuracy and reliability of predictions related to death outcome.
 
 ### 4.4.2. Outcome 2: Length of Survival by Diagnoses
 
@@ -1540,9 +1590,12 @@ rm(diagnoses_survival_outcome, diagnoses_survival_numbers, fit_diagnoses_num, hr
 
 ```
 
+The number of diagnoses (grouped as above) may not be a reliable predictor for survival outcomes in this dataset.
+
+
 ### 4.4.3. Outcome 3: Length of ICU Stay by Diagnoses
 
-``` {r Length of ICU Stay by Admission Data}
+``` {r Length of ICU Stay by Diagnoses Data Exploratory Analysis}
 diagnoses_LOS_numbers <- diagnoses_los_outcome %>%
   select(SUBJECT_ID_COMPOSE, LOS, DIAGNOSES_NUM) %>%
   distinct() %>%
@@ -1560,3 +1613,332 @@ print(result_diagnoses_num)
 rm(result_diagnoses_num, diagnosis_LOS_numbers, diagnoses_los_outcome)
 ```
 
+Higher numbers of diagnoses (6-10 and >10) are predictive of longer ICU stays, as indicated by statistically significant results.
+
+# 5. Isolations Data
+## 5.1. Read data
+
+``` {r read data isolations}
+isolations <- read.csv("../data/raw/cleaned/CALLOUT_clean.csv", stringsAsFactors = TRUE) %>%
+  mutate(across(where(is.character), as.factor))  %>%
+  filter(SUBJECT_ID %in% subject_ids_adults) %>%
+  mutate(SUBJECT_ID = as.factor(SUBJECT_ID),
+         REQUEST_TELE = as.factor(REQUEST_TELE),
+         REQUEST_RESP = as.factor(REQUEST_RESP),
+         REQUEST_CDIFF = as.factor(REQUEST_CDIFF),
+         REQUEST_MRSA = as.factor(REQUEST_MRSA),
+         REQUEST_VRE = as.factor(REQUEST_VRE))
+
+skimr::skim(isolations %>%
+              select(-SUBJECT_ID, -HADM_ID, -ROW_ID))
+```
+
+## 5.2.   Descriptive Statistics
+### 5.2.1. Descriptive statistics for categorical variables (Isolations Data)
+
+```{r descriptive statistics for categorical vars (Isolations Data)}
+# Clean and summarize the categorical data for all factor variables
+isolations %>%
+  select(-SUBJECT_ID, -SUBJECT_ID_COMPOSE, -OUTCOMETIME) %>%
+  select(where(is.factor)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, Value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+## 5.3. Visualisation Analysis by Outcome
+### 5.3.1. Outcome 1: Death Status by Isolations Data
+
+```{r Death Status by Isolations Data}
+isolations_death_outcome <- Death_status_outcome %>%
+  left_join(isolations, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF) %>%
+  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_TELE) & !is.na(REQUEST_RESP) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
+
+# Reshape the data to long format
+data_long <- isolations_death_outcome %>%
+  pivot_longer(cols = c(REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF), 
+               names_to = "Request_Type", 
+               values_to = "Flag") %>%
+  filter(!is.na(Flag))  # Remove rows where Flag is NA
+
+
+# Ensure Flag is a binary column (0 or 1)
+data_long$Flag <- as.integer(data_long$Flag)
+
+# Group by SURVIVAL_FLAG and Request_Type, then calculate counts
+count_data <- data_long %>%
+  group_by(SURVIVAL_FLAG, Request_Type) %>%
+  summarise(Count = sum(Flag == 1), .groups = "drop")  # Count where Flag == 1 (bacteria found)
+
+# Plot the data
+ggplot(count_data, aes(x = Request_Type, y = Count, fill = factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", position = "dodge2") +
+  labs(title = "Count of Bacteria Requests by Death Status",
+       x = "Request Type",
+       y = "Count",
+       fill = "Survival Status") +
+  scale_fill_manual(values = c(color_palette[7], color_palette[12]), labels = c("Survived", "Died")) +
+  geom_text(aes(label = Count), vjust = -0.5, position = position_dodge(0.9), size = 3.5) +  # Add text labels
+  theme_custom +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate the x-axis labels for better readability
+
+```
+
+### 5.3.2. Outcome 2: Length of Survival by Isolations Data
+
+```{r Length of Survival by Isolations Data}
+
+isolations_survival_outcome <- Survival_outcome %>%
+  left_join(isolations, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL, REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF) %>%
+  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_TELE) & !is.na(REQUEST_RESP) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
+
+# Reshape the data to long format for better visualization
+isolations_long <- isolations_survival_outcome %>%
+  pivot_longer(cols = c(REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF), 
+               names_to = "Isolation_Type", 
+               values_to = "Isolation_Flag") %>%
+  filter(!is.na(Isolation_Flag))  # Remove rows with missing values for Isolation_Flag
+
+# Plot: Boxplot of Survival Time by Isolation Flag
+ggplot(isolations_long, aes(x = factor(Isolation_Flag), y = SURVIVAL, fill = factor(Isolation_Flag))) +
+  geom_boxplot(outlier.shape = NA) +
+  facet_wrap(~Isolation_Type) + 
+  labs(title = "Survival Time by Bacterial Infection Requests (Isolation Flags)",
+       x = "Isolation Flag (0 = No, 1 = Yes)", y = "Survival Time (Days)") +
+  scale_fill_manual(values = c(color_palette[6], color_palette[10]), labels = c("No Infection", "Infection Detected")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+### 5.3.3. Outcome 3: Length of ICU Stay by Isolations Data
+
+``` {r Length of ICU Stay by Isolations Data}
+isolations_los_outcome <- LOS_outcome %>%
+  left_join(isolations, by = "SUBJECT_ID_COMPOSE") %>%
+  select(SUBJECT_ID_COMPOSE, LOS, REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF) %>%
+  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_TELE) & !is.na(REQUEST_RESP) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
+
+
+# Reshape the data to long format for better visualization
+isolations_long <- isolations_los_outcome %>%
+  pivot_longer(cols = c(REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF), 
+               names_to = "Isolation_Type", 
+               values_to = "Isolation_Flag") %>%
+  filter(!is.na(Isolation_Flag))  # Remove rows with missing values for Isolation_Flag
+
+# Plot: Boxplot of Survival Time by Isolation Flag
+ggplot(isolations_long, aes(x = factor(Isolation_Flag), y = LOS, fill = factor(Isolation_Flag))) +
+  geom_boxplot(outlier.shape = NA) +
+  facet_wrap(~Isolation_Type) + 
+  labs(title = "Survival Time by Bacterial Infection Requests (Isolation Flags)",
+       x = "Isolation Flag (0 = No, 1 = Yes)", y = "Survival Time (Days)") +
+  scale_fill_manual(values = c(color_palette[9], color_palette[15]), labels = c("No Infection", "Infection Detected")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+## 3.4. Exploratory analysis
+### 3.4.1. Outcome 1: Death Status by Isolations Data
+
+```{r Death Status by Isolations Data Exploratory Analysis}
+
+result_TELE <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_TELE", "TELE")
+result_RESP <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_RESP", "RESP")
+result_CDIFF <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_CDIFF", "CDIFF")
+result_MRSA <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_MRSA", "MRSA")
+result_VRE <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_VRE", "VRE")
+
+# Merge the results
+merged_results <- bind_rows(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE)
+
+print(merged_results)
+
+rm(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE, merged_results, isolations_death_outcome)
+
+```
+
+TELE, CDIFF, MRSA, and VRE will be considered as key predictors in death outcome models.
+
+### 3.4.2. Outcome 2: Length of Survival by Admissions Data
+
+```{r Length of Survival by Isolations Data exploratory analysis}
+
+# Generate Kaplan-Meier survival curve by GENDER
+fit_TELE <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_TELE, data = isolations_survival_outcome)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_TELE,
+  data = isolations_survival_outcome,
+  pval = TRUE,  # Display p-value for gender
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Admission type",
+  title = "Survival Curve by Admission Type",
+  palette =  color_palette
+)
+
+# Generate Kaplan-Meier survival curve by GENDER
+fit_RESP <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_RESP, data = isolations_survival_outcome)
+
+# Plot the Kaplan-Meier curve 
+ggsurvplot(
+  fit_RESP,
+  data = isolations_survival_outcome,
+  pval = TRUE,  # Display p-value for age groups
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Insurance",
+  title = "Survival Curve by Insurance",
+  palette = color_palette
+)
+
+# Fit Kaplan-Meier model
+fit_CDIFF <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_CDIFF, data = isolations_survival_outcome)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_CDIFF,
+  data = isolations_survival_outcome,
+  pval = TRUE,  # Display p-value
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Religion",
+  title = "Survival Curve by Religion",
+  palette = color_palette
+)
+
+# Fit Kaplan-Meier model
+fit_MRSA <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_MRSA, data = isolations_survival_outcome)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_MRSA,
+  data = isolations_survival_outcome,
+  pval = TRUE,  # Display p-value
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Marital Status",
+  title = "Survival Curve by Marital Status",
+  palette = color_palette
+)
+
+# Fit Kaplan-Meier model
+fit_VRE <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_VRE, data = isolations_survival_outcome)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_VRE,
+  data = isolations_survival_outcome,
+  pval = TRUE,  # Display p-value
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Ethnicity",
+  title = "Survival Curve by Ethnicity",
+  palette = color_palette
+)
+
+hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("REQUEST_TELE", "REQUEST_RESP", "REQUEST_CDIFF", "REQUEST_MRSA", "REQUEST_VRE"), isolations_survival_outcome)
+
+print(hr_table)
+
+rm(isolations_survival_outcome, hr_table, fit_TELE, fit_CDIFF, fit_RESP, fit_MRSA, fit_VRE)
+
+```
+
+Increased Risk: Significant risks are observed for Clostridium Difficile (CDIFF) and Vancomycin-Resistant Enterococci (VRE), which both increase the risk of death.
+
+Decreased Risk: Telemedicine (TELE) is associated with a significant reduction in the risk of death.
+
+No Significant Effect: Respiratory infections (RESP) and MRSA do not show statistically significant effects on survival.
+
+In summary, REQUEST_TELE, REQUEST_CDIFF, and REQUEST_VRE are strong candidates for inclusion in future models, while REQUEST_RESP and REQUEST_MRSA can be excluded or investigated further for possible significance with a larger dataset.
+
+### 5.4.3. Outcome 3: Length of ICU Stay by Isolations Data
+
+``` {r Length of ICU Stay by isolations Data exploratary analysis}
+  
+result_TELE <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_TELE", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_RESP <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_RESP", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_CDIFF <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_CDIFF", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_MRSA <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_MRSA", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+result_VRE <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_VRE", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+
+# Merge the results
+merged_results <- bind_rows(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE)
+
+print(merged_results)
+
+rm(isolations, isolations_los_outcome, merged_results, result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE)
+```
+
+REQUEST_CDIFF, REQUEST_MRSA, and REQUEST_VRE as strong predictors of LOS.
+
+# Result Table
+
+```{r result table}
+
+# Create the data frame with consistent and clear values for merging
+data <- data.frame(
+  Predictor = c(
+    "Demographic, socio-economic, and health system factors", "Gender", "Age", 
+    "Admission type", "Marital Status", "Insurance", "Religion", "Ethnicity",
+    "Diagnoses", "Number of diagnoses", "Key Diagnose", "All Diagnoses", 
+    "Isolations", "TELE", "RESP", "CDIFF", "MRSA", "VRE"
+  ),
+  Death_Status = c("", "+", "+", "+", "+", "+", "+", "+", "", "+", "+", "+", 
+                   "", "+", "-", "+", "+", "+"),
+  Survival = c("", "+", "+", "+", "+", "+", "+", "+", "", "", "Not estimated", "Not estimated", 
+               "", "+", "-", "+", "-", "+"),
+  LOS = c("", "-", "+", "+", "-", "+", "+", "-", "", "", "Not estimated", "Not estimated",
+          "", "-", "-", "+", "+", "+")
+)
+
+# Replace empty cells with NA for proper vertical merging
+data$Death_Status[data$Death_Status == ""] <- NA
+
+# Create the flextable
+ft <- flextable(data)
+
+# Apply merging and formatting
+ft <- ft %>%
+  set_header_labels(
+    Predictor = "Predictor",
+    Death_Status = "Death Status",
+    Survival = "Survival",
+    LOS = "Length of Stay (LOS)"
+  ) %>%
+  autofit() %>%  # Automatically fit the table
+  theme_vanilla()  # Add a clean theme
+
+# Add padding and alignment for better visuals
+ft <- ft %>%
+  padding(padding = 6, part = "all") %>%
+  align(align = "center", part = "all") %>%
+  align(j = 1, align = "left", part = "all")  # Left-align the Predictor column
+
+# Display the flextable
+ft
+
+```
