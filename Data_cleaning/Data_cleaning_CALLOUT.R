@@ -61,5 +61,9 @@ if (nrow(inconsistent_rows) > 0) {
   print("All rows have consistent CALLOUT_OUTCOME and OUTCOMETIME values.")
 }
 
+# Create composed Subject_id
+callout_clean <- callout_clean %>%
+  mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
 # Write cleaned admissions to csv
 write.csv(callout_clean, "data/raw/cleaned/CALLOUT_clean.csv", row.names = FALSE)

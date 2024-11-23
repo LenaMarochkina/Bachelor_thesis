@@ -1694,6 +1694,7 @@ ggplot(count_data, aes(x = Request_Type, y = Count, fill = factor(SURVIVAL_FLAG)
   theme_custom +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate the x-axis labels for better readability
 
+rm(count_data, data_long)
 ```
 
 ### 5.3.2. Outcome 2: Length of Survival by Isolations Data
@@ -1721,6 +1722,8 @@ ggplot(isolations_long, aes(x = factor(Isolation_Flag), y = SURVIVAL, fill = fac
   scale_fill_manual(values = c(color_palette[6], color_palette[10]), labels = c("No Infection", "Infection Detected")) +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+rm(isolations_long)
 
 ```
 
@@ -1750,11 +1753,11 @@ ggplot(isolations_long, aes(x = factor(Isolation_Flag), y = LOS, fill = factor(I
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
-
+rm(isolations_long)
 ```
 
-## 3.4. Exploratory analysis
-### 3.4.1. Outcome 1: Death Status by Isolations Data
+## 5.4. Exploratory analysis
+### 5.4.1. Outcome 1: Death Status by Isolations Data
 
 ```{r Death Status by Isolations Data Exploratory Analysis}
 
@@ -1894,6 +1897,49 @@ rm(isolations, isolations_los_outcome, merged_results, result_TELE, result_RESP,
 ```
 
 REQUEST_CDIFF, REQUEST_MRSA, and REQUEST_VRE as strong predictors of LOS.
+
+# 6. Prescriptions Data
+# 6.1. Read data
+
+``` {r read data prescriptions}
+prescriptions <- read.csv("../data/raw/cleaned/PRESCRIPTIONS_clean.csv", stringsAsFactors = TRUE) %>%
+  mutate(across(where(is.character), as.factor))  %>%
+  filter(SUBJECT_ID %in% subject_ids_adults) %>%
+  mutate(SUBJECT_ID = as.factor(SUBJECT_ID),
+         ATC_ID = as.character(ATC_ID)) 
+
+skimr::skim(prescriptions %>%
+              select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -ICUSTAY_ID))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # Result Table
 

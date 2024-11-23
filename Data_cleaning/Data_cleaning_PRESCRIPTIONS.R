@@ -156,14 +156,38 @@ ndc_codes <- unique(ndc_codes)
 # Remove any NA values in case there are missing NDC codes
 ndc_codes <- na.omit(ndc_codes)
 
+valid_data <- prescriptions_clean %>%
+  filter(NDC != "0" & !is.na(DRUG_NAME_GENERIC) & DRUG_NAME_GENERIC != "" & !is.na(NDC)) %>%
+  select(DRUG_NAME_GENERIC, NDC) %>%
+  distinct()
+
+# Define a function to replace NDC
+for (i in 1:nrow(prescriptions_clean)) {
+  # Check if NDC is "0" and DRUG_NAME_GENERIC is not NA or empty
+  if (prescriptions_clean$NDC[i] == "0" && !is.na(prescriptions_clean$NDC[i]) && !is.na(prescriptions_clean$DRUG_NAME_GENERIC[i]) && prescriptions_clean$DRUG_NAME_GENERIC[i] != "") {
+    # Find the NDC for the matching DRUG_NAME_GENERIC
+    matched_ndc <- valid_data$NDC[valid_data$DRUG_NAME_GENERIC == prescriptions_clean$DRUG_NAME_GENERIC[i]]
+    
+    if (length(matched_ndc) > 0) {
+      # Replace NDC with the matched value
+      prescriptions_clean$NDC[i] <- matched_ndc[1]  # Take the first match if there are multiple
+      cat("Replaced NDC in row", i, "with:", matched_ndc[1], "\n")
+    } else {
+      cat(paste("No matching NDC found for DRUG_NAME_GENERIC", prescriptions_clean$DRUG_NAME_GENERIC[i], "\n"))
+    }
+  } else {
+    cat("Skipping row", i, "as conditions not met.\n")
+  }
+}
+
 # Function to query the RxNorm API and extract the first RXCUI using the NDC code
 get_rxcui_from_ndc <- function(ndc) {
   url <- paste0("https://rxnav.nlm.nih.gov/REST/relatedndc.json?relation=drug&ndc=", ndc)
   response <- GET(url)
-
+  
   if (status_code(response) == 200) {
     data <- content(response, as = "parsed", type = "application/json")
-
+    
     # Check if ndcInfoList exists in the response
     if (!is.null(data$ndcInfoList$ndcInfo)) {
       # Extract the first rxcui value associated with the given ndc
@@ -189,7 +213,7 @@ for (ndc in ndc_codes) {
   ndc_rxcui_map <- rbind(ndc_rxcui_map, data.frame(NDC = ndc, RXCUI = rxcui, stringsAsFactors = FALSE))
 }
 
-# Create dataset with NA RXCUI, add to dataset DRUG_GENERIC_NAME + DOSE_VAL_RX + DOSE_UNIT_RX  as new col
+# Create dataset with NA RXCUI, add to dataset DRUG_NAME_GENERIC_NAME + DOSE_VAL_RX + DOSE_UNIT_RX  as new col
 # Filter rows with missing RXCUI values
 na_rxcui_dataset_with_doses <- ndc_rxcui_map %>%
   filter(is.na(RXCUI))
@@ -213,21 +237,14 @@ na_rxcui_dataset_with_doses <- na_rxcui_dataset_with_doses %>%
 get_rxcui_from_name <- function(combined_info) {
   url <- paste0("https://rxnav.nlm.nih.gov/REST/rxcui.json?name=", URLencode(combined_info), "&search=2&allsrc=1")
   response <- GET(url)
-
-  # Check if the API call was successful
+  
   if (status_code(response) == 200) {
     data <- content(response, as = "parsed", type = "application/json")
-
-    # Print the raw response to check if it contains the expected data
-    print(data)
-
-    # Check if idGroup and rxnormId exist in the response
+    
     if (!is.null(data$idGroup$rxnormId)) {
-      first_rxcui <- data$idGroup$rxnormId[[1]]
-      return(first_rxcui)  # Return the first RXCUI found
+      return(data$idGroup$rxnormId[[1]])  # Return the first RXCUI found
     } else {
-      message("RXCUI not found for: ", combined_info)
-      return(NA)  # Return NA if no relevant information is found
+      return(NA)  # No RXCUI found
     }
   } else {
     message("Error in API call for: ", combined_info, " - Status code: ", status_code(response))
@@ -235,36 +252,55 @@ get_rxcui_from_name <- function(combined_info) {
   }
 }
 
-# Function to fetch RXCUI in parallel using furrr with improved error handling
-fetch_rxcui_in_parallel <- function(combined_info_list, batch_size = 500) {
+# Function to fetch RXCUI in parallel with rate-limiting and retry logic
+fetch_rxcui_in_parallel <- function(combined_info_list, batch_size = 500, delay_between_batches = 10, max_retries = 3) {
   library(furrr)
   plan(multisession)  # Set the plan for parallel processing
-
+  
   # Split the list into batches of size `batch_size`
   batches <- split(combined_info_list, ceiling(seq_along(combined_info_list) / batch_size))
-
+  
   rxcui_results <- vector("character", length(combined_info_list))  # Pre-allocate results vector
   total_batches <- length(batches)  # Total number of batches
-
-  # Iterate over each batch and fetch results in parallel
+  
   for (i in seq_along(batches)) {
     message(paste("Processing batch", i, "of", total_batches, "- Remaining:", total_batches - i, "batches"))
-
+    
     batch <- batches[[i]]
-    batch_results <- future_map(batch, possibly(get_rxcui_from_name, NA_character_), .progress = TRUE)
-
-    # Calculate the start and end positions for the batch in the results vector
-    start_index <- (i - 1) * batch_size + 1
-    end_index <- min(i * batch_size, length(combined_info_list))  # Ensure the end index doesn't exceed the list size
-
-    # Store the results in the corresponding positions in the results vector
-    rxcui_results[start_index:end_index] <- unlist(batch_results)
+    success <- FALSE
+    retries <- 0
+    
+    while (!success && retries < max_retries) {
+      tryCatch({
+        batch_results <- future_map(batch, possibly(get_rxcui_from_name, NA_character_), .progress = TRUE)
+        
+        # Calculate the start and end positions for the batch in the results vector
+        start_index <- (i - 1) * batch_size + 1
+        end_index <- min(i * batch_size, length(combined_info_list))
+        
+        # Store the results in the corresponding positions in the results vector
+        rxcui_results[start_index:end_index] <- unlist(batch_results)
+        
+        success <- TRUE  # Mark as successful
+      }, error = function(e) {
+        retries <- retries + 1
+        message(paste("Retry", retries, "for batch", i, "- Error:", e$message))
+        Sys.sleep(delay_between_batches)  # Wait before retrying
+      })
+    }
+    
+    if (!success) {
+      message("Failed to process batch ", i, " after ", max_retries, " retries.")
+    }
+    
+    # Delay to avoid rate-limiting
+    Sys.sleep(delay_between_batches)
   }
-
+  
   return(rxcui_results)
 }
 
-# Apply the function to the na_rxcui_dataset to fetch RXCUI using the COMBINED_INFO column with a progress bar
+# Apply the function to the dataset
 na_rxcui_dataset_with_doses <- na_rxcui_dataset_with_doses %>%
   mutate(rxcui = fetch_rxcui_in_parallel(COMBINED_INFO)) %>%
   mutate(RXCUI = rxcui) %>%
@@ -310,16 +346,18 @@ prescriptions_clean <- prescriptions_clean %>%
 get_atc_info <- function(rxcui) {
   url <- paste0("https://rxnav.nlm.nih.gov/REST/rxclass/class/byRxcui.xml?rxcui=", rxcui, "&relaSource=ATC")
   response <- GET(url)
-
+  
   if (status_code(response) == 200) {
     data <- content(response, as = "parsed")
-
+    
     # Parse XML response to extract ATC information
     atc_id <- xml_text(xml_find_first(data, "//rxclassMinConceptItem/classId"))
     atc_name <- xml_text(xml_find_first(data, "//rxclassMinConceptItem/className"))
-
+    atc_type <- "ATC"  # Assign a default value or update based on API response if needed
+    
     return(list(RXCUI = rxcui, ATC_ID = atc_id, ATC_NAME = atc_name, ATC_TYPE = atc_type))
   } else {
+    # Return NA for all fields if the API call fails
     return(list(RXCUI = rxcui, ATC_ID = NA, ATC_NAME = NA, ATC_TYPE = NA))
   }
 }
@@ -327,31 +365,31 @@ get_atc_info <- function(rxcui) {
 # Function to fetch ATC information in parallel with a progress bar
 fetch_atc_info_parallel <- function(rxcui_list, batch_size = 1000) {
   plan(multisession)  # Use multiple sessions for parallel processing
-
+  
   # Split the list into batches of size `batch_size`
   batches <- split(rxcui_list, ceiling(seq_along(rxcui_list) / batch_size))
-
+  
   pb <- progress_bar$new(
     format = "Fetching ATC Info [:bar] :percent (:current/:total) Elapsed: :elapsed ETA: :eta",
     total = length(batches), clear = FALSE, width = 60
   )
-
+  
   atc_results <- vector("list", length(rxcui_list))  # Pre-allocate list for results
-
+  
   for (i in seq_along(batches)) {
     batch <- batches[[i]]
-
+    
     # Send API requests in parallel for the current batch
-    batch_results <- future_map(batch, get_atc_info, .progress = FALSE)
-
+    batch_results <- future_map(batch, possibly(get_atc_info, list(RXCUI = NA, ATC_ID = NA, ATC_NAME = NA, ATC_TYPE = NA)), .progress = FALSE)
+    
     start_index <- (i - 1) * batch_size + 1
     end_index <- min(i * batch_size, length(rxcui_list))
-
+    
     atc_results[start_index:end_index] <- batch_results
-
+    
     pb$tick()  # Update the progress bar
   }
-
+  
   # Convert list of results to a data frame
   atc_df <- do.call(rbind, lapply(atc_results, function(x) as.data.frame(x, stringsAsFactors = FALSE)))
   return(atc_df)
@@ -375,19 +413,25 @@ update_atc_codes <- function(data) {
   data <- data %>%
     mutate(
       ATC_ID = case_when(
-        GENERIC_DRUG_NAME == "sodium chloride" ~ "B05XA",
-        GENERIC_DRUG_NAME == "lactated ringers" ~ "B05BB",
+        DRUG_NAME_GENERIC == "SODIUM CHLORIDE" ~ "B05XA",
+        DRUG_NAME_GENERIC == "LACTATED RINGERS" ~ "B05BB",
         TRUE ~ ATC_ID  # Keep the existing ATC_ID if no match is found
       ),
       ATC_NAME = case_when(
-        GENERIC_DRUG_NAME == "sodium chloride" ~ "Electrolyte solutions",
-        GENERIC_DRUG_NAME == "lactated ringers" ~ "Solutions affecting the electrolyte balance",
+        DRUG_NAME_GENERIC == "SODIUM CHLORIDE" ~ "Electrolyte solutions",
+        DRUG_NAME_GENERIC == "LACTATED RINGERS" ~ "Solutions affecting the electrolyte balance",
         TRUE ~ ATC_NAME  # Keep the existing ATC_NAME if no match is found
       )
     )
-
+  
   return(data)
 }
 
+prescriptions_clean <- update_atc_codes(prescriptions_clean)
+
+# Create composed Subject_id
+prescriptions_clean <- prescriptions_clean %>%
+  mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
 # Write cleaned admissions to csv
-write.csv(prescriptions_clean, "data/raw/cleaned/ADMISSIONS_clean.csv", row.names = FALSE)
+write.csv(prescriptions_clean, "data/raw/cleaned/PRESCRIPTIONS_clean.csv", row.names = FALSE)
