@@ -359,7 +359,7 @@ admissions <- read.csv("../data/raw/cleaned/ADMISSIONS_clean.csv", stringsAsFact
 # Read the ICUSTAYS dataset and filter using the SUBJECT_ID vector
 icu_stays <- read.csv("../data/raw/cleaned/ICUSTAYS_clean.csv", stringsAsFactors = TRUE) %>%
   filter(SUBJECT_ID %in% subject_ids_adults) %>%  # Filter for adult patients
-  mutate(across(c(SUBJECT_ID, HADM_ID), as.factor)) 
+  mutate(across(c(SUBJECT_ID, HADM_ID, ICUSTAY_ID), as.factor)) 
 ```
 
 ## 1.2. Desriptive Statistics and Visualisation Analysis
@@ -495,7 +495,7 @@ The boxplot and density plot show that most patients died within 0 to 10 days, w
 ```{r descriptive statistics for length of ICU stay}
 # LOS outcome
 LOS_outcome <- icu_stays %>%
-  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, LOS)
+  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, ICUSTAY_ID, LOS)
 
 icu_stays %>%
   select(LOS) %>%
@@ -534,7 +534,7 @@ cat("Percentage of outliers in LOS:", round(percent_outliers_los, 2), "%\n")
 
 # Filter out the outliers
 LOS_outcome <- LOS_outcome %>%
-  select(LOS, SUBJECT_ID, SUBJECT_ID_COMPOSE, outlier_los) %>%
+  select(LOS, SUBJECT_ID, SUBJECT_ID_COMPOSE, ICUSTAY_ID, outlier_los) %>%
   filter(outlier_los == FALSE)
 
 # Drop the outlier column after filtering
@@ -1778,7 +1778,7 @@ rm(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE, merged_resul
 
 TELE, CDIFF, MRSA, and VRE will be considered as key predictors in death outcome models.
 
-### 3.4.2. Outcome 2: Length of Survival by Admissions Data
+### 5.4.2. Outcome 2: Length of Survival by Admissions Data
 
 ```{r Length of Survival by Isolations Data exploratory analysis}
 
@@ -1906,24 +1906,475 @@ prescriptions <- read.csv("../data/raw/cleaned/PRESCRIPTIONS_clean.csv", strings
   mutate(across(where(is.character), as.factor))  %>%
   filter(SUBJECT_ID %in% subject_ids_adults) %>%
   mutate(SUBJECT_ID = as.factor(SUBJECT_ID),
-         ATC_ID = as.character(ATC_ID)) 
+         ICUSTAY_ID = as.factor(ICUSTAY_ID),
+         ATC_ID = as.factor(ATC_ID),
+         STARTDATE = as.Date(STARTDATE),
+         ENDDATE = as.Date(ENDDATE)) %>%
+  select(-DRUG, -NDC, -DOSE_VAL_RX, -DOSE_UNIT_RX, -RXCUI, -COMBINED_INFO, -ATC_TYPE) 
 
 skimr::skim(prescriptions %>%
               select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -ICUSTAY_ID))
 ```
+## 6.2. Desriptive statistics
 
+### 6.2.1. Descriptive statistics for categorical variables Prescriptions data)
 
+```{r descriptive statistica prescriptions}
+# Clean and summarize the categorical data for all factor variables
+prescriptions %>%
+  select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -ICUSTAY_ID, -ATC_ID) %>%
+  select(where(is.factor)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  filter(!is.na(Value)) %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  filter(`% by group` > 0.5) %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, Value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
 
+## 6.3. Visualisation Analysis by Outcome
+### 6.3.1. Outcome 1: Death Status by Prescripions Data
 
+```{r Death Status by Prescripions Data}
 
+# Assuming Death_status_outcome contains death information and prescriptions has drug data
+prescriptions_death_outcome <- Death_status_outcome %>%
+  left_join(prescriptions, by = c("SUBJECT_ID_COMPOSE", "SUBJECT_ID")) %>% 
+  distinct() %>%
+  select("SUBJECT_ID_COMPOSE", ATC_NAME, DRUG_TYPE, DRUG_NAME_GENERIC, SURVIVAL_FLAG)
 
+prescriptions_death_outcome %>%
+  group_by(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG) %>%  
+  summarise(
+    num_drugs = n_distinct(DRUG_NAME_GENERIC), 
+    .groups = "drop"
+  ) %>%
+  group_by(SURVIVAL_FLAG) %>%                     
+  summarise(
+    avg_prescriptions_per_patient = mean(num_drugs, na.rm = TRUE), 
+    total_patients = n(),                                
+    .groups = "drop"
+  ) %>%
+ggplot(aes(x = factor(SURVIVAL_FLAG), y = avg_prescriptions_per_patient, fill = factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(
+    aes(label = sprintf("%.2f", avg_prescriptions_per_patient)),
+    position = position_stack(vjust = 0.5),
+    size = 5                                
+  ) +
+  labs(
+    title = "Average Number of Drugs per Patient by Survival Status",
+    x = "Survival Status",
+    y = "Average Number of Drugs",
+    fill = "Survival Status"
+  ) +
+ scale_fill_manual(
+    values = sample(color_palette, size = length(unique(prescriptions_death_outcome$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Not Dead", "1" = "Dead")
+    ) +
+  theme_custom +                                                  # Apply custom theme
+  theme(
+    legend.position = "top",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
 
+# Calculate mean number of drugs by DRUG_TYPE and Survival Status
+prescriptions_death_outcome %>%
+  group_by(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, DRUG_TYPE) %>%
+  summarise(
+    num_drugs = n_distinct(DRUG_NAME_GENERIC),  # Count distinct drugs per patient by drug type
+    .groups = "drop"
+  ) %>%
+  group_by(DRUG_TYPE, SURVIVAL_FLAG) %>%
+  summarise(
+    avg_prescriptions_per_patient = mean(num_drugs, na.rm = TRUE),  # Average drugs per drug type
+    total_patients = n(),                                  # Count total patients
+    .groups = "drop"
+  ) %>%
+ggplot(aes(x = DRUG_TYPE, y = avg_prescriptions_per_patient, fill = factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.6) +
+  geom_text(
+    aes(label = sprintf("%.2f", avg_prescriptions_per_patient)),  # Add average drugs labels
+    position = position_dodge(width = 0.8),               # Place text above bars
+    vjust = -0.5,                                         # Adjust vertical position
+    size = 4                                              # Adjust text size
+  ) +
+  labs(
+    title = "Average Number of Drugs by Drug Type and Survival Status",
+    x = "Drug Type",
+    y = "Average Number of Drugs",
+    fill = "Survival Status"
+  ) +
+   scale_fill_manual(
+    values = sample(color_palette, size = length(unique(prescriptions_death_outcome$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Not Dead", "1" = "Dead")
+    ) +
+  theme_custom +                                          # Apply custom theme
+  theme(
+    legend.position = "top",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)     # Rotate x-axis labels for better readability
+  )
 
+# Filter for DRUG_TYPE == "MAIN" and find the most common drugs by survival flag
+top_common_drugs <- prescriptions_death_outcome %>%
+  filter(DRUG_TYPE == "MAIN") %>%                # Filter rows where DRUG_TYPE is "MAIN"
+  group_by(SURVIVAL_FLAG, DRUG_NAME_GENERIC) %>%
+  summarise(count = n(), .groups = "drop") %>%   # Count occurrences of each drug
+  arrange(SURVIVAL_FLAG, desc(count)) %>%        # Sort by survival flag and count (descending)
+  group_by(SURVIVAL_FLAG) %>%
+  slice_head(n = 20) %>%                          # Select the top 5 most common drugs for each survival flag
+  ungroup()
 
+# Visualize the top common drugs as a grouped bar plot
+ggplot(top_common_drugs, aes(x = reorder(DRUG_NAME_GENERIC, -count), y = count, fill = factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.6) +
+  labs(
+    title = "Top 5 Most Common Main Drugs by Survival Flag",
+    x = "Drug Name (Generic)",
+    y = "Count",
+    fill = "Survival Status"
+  ) +
+   scale_fill_manual(
+    values = sample(color_palette, size = length(unique(prescriptions_death_outcome$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Not Dead", "1" = "Dead")
+    ) +
+  coord_flip() +
+  theme_custom +
+  theme(
+    legend.position = "top",
+    axis.text.x = element_text(angle = 45, hjust = 1)     # Rotate x-axis labels for better readability
+  )
 
+# Identify top ATC names by frequency
+top_atc_names <- prescriptions_death_outcome %>%
+  group_by(ATC_NAME) %>%
+  summarise(count = n(), .groups = "drop") %>%         # Count occurrences of each ATC name
+  arrange(desc(count)) %>%                            # Sort by descending frequency
+  slice_head(n = 10)                                  # Select top 10 ATC names
 
+# Visualize top ATC names
+ggplot(top_atc_names, aes(x = reorder(ATC_NAME, -count), y = count)) +
+  geom_bar(stat = "identity", fill = "pink", width = 0.7) +
+  geom_text(aes(label = count), hjust = -0.5, size = 4) +
+  labs(
+    title = "Top 10 ATC Names",
+    x = "ATC Name",
+    y = "Frequency"
+  ) +
+  coord_flip() +
+  theme_custom +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels for readability
+  )
 
+rm(top_common_drugs, top_atc_names)
 
+```
+
+### 6.3.2. Outcome 2: Length of Survival by Prescriptions Data
+
+```{r Length of Survival by Prescriptions Data}
+prescriptions_survival_outcome <- Survival_outcome %>%
+  left_join(prescriptions, by = c("SUBJECT_ID", "SUBJECT_ID_COMPOSE")) %>%
+  distinct()
+
+prescriptions_survival_outcome %>%
+  group_by(SUBJECT_ID_COMPOSE, SURVIVAL) %>%
+  summarise(
+    num_drugs = n_distinct(DRUG_NAME_GENERIC),  # Count distinct drugs per patient
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = num_drugs)) +
+  geom_density(fill = color_palette[8], alpha = 0.6) +
+  labs(
+    title = "Density of Number of Drugs by Survival (Days)",
+    x = "Number of Drugs",
+    y = "Density"
+  ) +
+  theme_custom +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Boxplot: Survival distribution by drug type
+prescriptions_survival_outcome %>%
+  ggplot(aes(x = DRUG_TYPE, y = SURVIVAL, fill = DRUG_TYPE)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(
+    title = "Survival Distribution by Drug Type",
+    x = "Drug Type",
+    y = "Survival (Days)"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(prescriptions_survival_outcome$DRUG_TYPE)), replace = FALSE)
+    ) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+# Filter for DRUG_TYPE == "MAIN" and find the most common drugs
+top_common_drugs <- prescriptions_survival_outcome %>%
+  filter(DRUG_TYPE == "MAIN") %>%               
+  group_by(DRUG_NAME_GENERIC) %>%
+  summarise(count = n(), .groups = "drop") %>%    # Count occurrences of each drug
+  arrange(desc(count)) %>%                       # Sort by descending frequency
+  slice_head(n = 20)                             # Select the top 20 most common drugs
+
+# Boxplot: Survival distribution by top generic names
+prescriptions_survival_outcome %>%
+  filter(DRUG_NAME_GENERIC %in% unique(top_common_drugs$DRUG_NAME_GENERIC)) %>%
+  ggplot(aes(x = reorder(DRUG_NAME_GENERIC, SURVIVAL), y = SURVIVAL, fill = DRUG_NAME_GENERIC)) +
+  geom_boxplot(outlier.color = "black") +
+  coord_flip() +
+  labs(
+    title = "Survival Distribution by Top Generic Names",
+    x = "Generic Name",
+    y = "Survival (Days)"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(top_common_drugs$DRUG_NAME_GENERIC)), replace = FALSE)
+  ) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+
+### 6.3.3. Outcome 3: Length of ICU Stay by Prescriptions Data
+
+```{r Length of ICU Stay by Prescriptions Data}
+prescriptions_los_outcome <- LOS_outcome %>%
+  left_join(prescriptions, by = c("SUBJECT_ID_COMPOSE", "ICUSTAY_ID", "SUBJECT_ID")) %>%
+  distinct()
+
+# Density plot: Number of drugs vs. LOS
+prescriptions_los_outcome %>%
+  group_by(SUBJECT_ID_COMPOSE, LOS) %>%
+  summarise(
+    num_drugs = n_distinct(DRUG_NAME_GENERIC),  # Count distinct drugs per patient
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = num_drugs)) +
+  geom_density(fill = color_palette[8], alpha = 0.6) +
+  labs(
+    title = "Density of Number of Drugs by LOS (Days)",
+    x = "Number of Drugs",
+    y = "Density"
+  ) +
+  theme_custom +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Boxplot: LOS distribution by drug type
+prescriptions_los_outcome %>%
+  ggplot(aes(x = DRUG_TYPE, y = LOS, fill = DRUG_TYPE)) +
+  geom_boxplot(outlier.color = "black") +
+  labs(
+    title = "LOS Distribution by Drug Type",
+    x = "Drug Type",
+    y = "LOS (Days)"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(prescriptions_los_outcome$DRUG_TYPE)), replace = FALSE)
+  ) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+# Filter for DRUG_TYPE == "MAIN" and find the most common drugs
+top_common_drugs <- prescriptions_los_outcome %>%
+  filter(DRUG_TYPE == "MAIN") %>%               
+  group_by(DRUG_NAME_GENERIC) %>%
+  summarise(count = n(), .groups = "drop") %>%    # Count occurrences of each drug
+  arrange(desc(count)) %>%                       # Sort by descending frequency
+  slice_head(n = 20)                             # Select the top 20 most common drugs
+
+# Boxplot: LOS distribution by top generic names
+prescriptions_los_outcome %>%
+  filter(DRUG_NAME_GENERIC %in% unique(top_common_drugs$DRUG_NAME_GENERIC)) %>%
+  ggplot(aes(x = reorder(DRUG_NAME_GENERIC, LOS), y = LOS, fill = DRUG_NAME_GENERIC)) +
+  geom_boxplot(outlier.color = "black") +
+  coord_flip() +
+  labs(
+    title = "LOS Distribution by Top Generic Names",
+    x = "Generic Name",
+    y = "LOS (Days)"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(top_common_drugs$DRUG_NAME_GENERIC)), replace = FALSE)
+  ) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+# Identify top ATC names by frequency
+top_atc_names <- prescriptions_los_outcome %>%
+  group_by(ATC_NAME) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(desc(count)) %>%
+  slice_head(n = 10)  # Select the top 10 ATC names
+
+# Boxplot: LOS distribution by top ATC names
+prescriptions_los_outcome %>%
+  filter(ATC_NAME %in% unique(top_atc_names$ATC_NAME)) %>%
+  ggplot(aes(x = reorder(ATC_NAME, LOS), y = LOS, fill = ATC_NAME)) +
+  geom_boxplot(outlier.color = "black") +
+  coord_flip() +
+  labs(
+    title = "LOS Distribution by Top ATC Names",
+    x = "ATC Name",
+    y = "LOS (Days)"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(top_atc_names$ATC_NAME)), replace = FALSE)
+  ) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels for readability
+  )
+```
+
+## 6.4. Exploratory analysis
+### 6.4.1. Outcome 1: Death Status by Prescriptions Data
+
+```{r Death Status by Prescriptions Data Exploratory Analysis}
+prescriptions_number <- prescriptions_death_outcome %>%
+  group_by(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG) %>%
+  summarise(
+    PRESCRIPTIONS_NUM = n(),  # Count total prescriptions per patient
+    .groups = "drop"
+  )
+
+result_prescriptions_number <- perform_statistical_tests(prescriptions_number, "SURVIVAL_FLAG", "PRESCRIPTIONS_NUM", "Prescription number")
+result_drug_type <- perform_statistical_tests(prescriptions_death_outcome, "SURVIVAL_FLAG", "DRUG_TYPE", "Drug type")
+result_ATC <- perform_statistical_tests(prescriptions_death_outcome, "SURVIVAL_FLAG", "ATC_NAME", "ATC name")
+result_generic_name <- perform_statistical_tests(prescriptions_death_outcome, "SURVIVAL_FLAG", "DRUG_NAME_GENERIC", "Generic name")
+
+# Merge the results
+merged_results <- bind_rows(result_prescriptions_number, result_ATC, result_drug_type, result_generic_name)
+
+print(merged_results)
+
+rm(prescriptions_number, result_prescriptions_number, result_ATC, result_generic_name)
+```
+
+### 6.4.2. Outcome 2: Length of Survival by Prescriptions
+
+```{r Length of Survival by Prescriptions Exploratory analysis}
+# Merge survival outcome with prescriptions and create DRUGS_NUM
+prescriptions_survival_outcome <- Survival_outcome %>%
+  left_join(prescriptions, by = "SUBJECT_ID_COMPOSE") %>%
+  group_by(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG) %>%
+  summarise(
+    DRUGS_NUM = n_distinct(DRUG_NAME_GENERIC),  # Count distinct drugs prescribed for each patient
+    .groups = "drop"
+  ) %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG))  # Ensure SURVIVAL_FLAG is numeric
+  )
+
+# Create number of drugs ranges
+prescriptions_survival_numbers <- prescriptions_survival_outcome %>%
+  distinct() %>%
+  mutate(
+    prescriptions_NUM = cut(DRUGS_NUM,
+                    breaks = c(0, 1, 3, 10, 20, 30, Inf),  # Include 0-1 as the first interval
+                    labels = c("1", "1-3", "3-10", "10-20", "20-30", ">30"),  # Five intervals
+                    right = FALSE)  # Include the left boundary in each group
+  )
+
+# Generate Kaplan-Meier survival curve by number of drugs
+fit_prescriptions_num <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ prescriptions_NUM, data = prescriptions_survival_numbers)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_prescriptions_num,
+  data = prescriptions_survival_numbers,
+  pval = TRUE,  # Display p-value for drug number
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Number of Drugs",
+  title = "Survival Curve by Number of Drugs",
+  palette = color_palette
+)
+
+# Perform Hazard Ratio (HR) assessment
+hr_table_number_drugs <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "prescriptions_NUM", prescriptions_survival_numbers)
+
+print(hr_table_number_drugs)
+
+# Remove intermediate objects to clean up
+rm(prescriptions_survival_outcome, prescriptions_survival_numbers, fit_prescriptions_num, hr_table_number_drugs)
+
+```
+
+PRESCRIPTIONS_NUM should be included as a predictor in future modeling.
+
+Significant Risk: All intervals show highly significant hazard ratios (HR) with p < 0.0001, indicating it is strongly associated with survival outcomes.
+
+### 6.4.3. Outcome 3: Length of ICU Stay by Prescriptions Data
+
+```{r Length of ICU Stay by Prescriptions Data Exploratory analysis}
+prescriptions_LOS_numbers <- prescriptions_los_outcome %>%
+  group_by(SUBJECT_ID_COMPOSE, ICUSTAY_ID, LOS) %>%
+  summarise(
+    PRESCRIPTIONS_NUM = n_distinct(DRUG_NAME_GENERIC),  # Count unique prescriptions per patient
+    .groups = "drop"
+  ) %>%
+  mutate(
+    PRESCRIPTIONS_NUM = cut(PRESCRIPTIONS_NUM,
+                            breaks = c(0, 1, 3, 10, 20, 30, Inf),  # Include 0-1 as the first interval
+                            labels = c("1", "1-3", "3-10", "10-20", "20-30", ">30"),  # Five intervals
+                            right = FALSE)  # Include the left boundary in each group
+  )
+
+# Analyze LOS by prescription intervals
+result_prescriptions_num <- analyze_predictor_LOS(
+  prescriptions_LOS_numbers,
+  predictor = "PRESCRIPTIONS_NUM",
+  LOS = "LOS",
+  patient_id = "SUBJECT_ID_COMPOSE"
+)
+
+# Print the result
+print(result_prescriptions_num)
+
+# Remove intermediate objects
+rm(result_prescriptions_num, prescriptions_LOS_numbers, prescriptions_los_outcome)
+
+```
+
+PRESCRIPTIONS_NUM is a significant predictor for the length of ICU stay based on mixed-effects model results. All groups demonstrate statistical significance (p < 0.001), indicating that the number of prescriptions is associated with variations in ICU stay duration.
+
+PRESCRIPTIONS_NUM should be included in future models for ICU stay prediction.
 
 
 
@@ -1951,14 +2402,18 @@ data <- data.frame(
     "Demographic, socio-economic, and health system factors", "Gender", "Age", 
     "Admission type", "Marital Status", "Insurance", "Religion", "Ethnicity",
     "Diagnoses", "Number of diagnoses", "Key Diagnose", "All Diagnoses", 
-    "Isolations", "TELE", "RESP", "CDIFF", "MRSA", "VRE"
+    "Isolations", "TELE", "RESP", "CDIFF", "MRSA", "VRE",
+    "Prescriptions", "Number of prescriptions", "ATC", "Generic names"
   ),
   Death_Status = c("", "+", "+", "+", "+", "+", "+", "+", "", "+", "+", "+", 
-                   "", "+", "-", "+", "+", "+"),
+                   "", "+", "-", "+", "+", "+",
+                   "", "+", "+", "+"),
   Survival = c("", "+", "+", "+", "+", "+", "+", "+", "", "", "Not estimated", "Not estimated", 
-               "", "+", "-", "+", "-", "+"),
+               "", "+", "-", "+", "-", "+",
+               "", "+", "Not estimated", "Not estimated"),
   LOS = c("", "-", "+", "+", "-", "+", "+", "-", "", "", "Not estimated", "Not estimated",
-          "", "-", "-", "+", "+", "+")
+          "", "-", "-", "+", "+", "+",
+          "", "+", "Not estimated", "Not estimated")
 )
 
 # Replace empty cells with NA for proper vertical merging
