@@ -51,7 +51,7 @@ icu_stays_clean <- icu_stays_clean %>%
 
 # Select only necessary columns
 icu_stays_clean <- icu_stays_clean %>%
-  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, HADM_ID, LOS, SEQ_NUM)
+  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, ICUSTAY_ID, HADM_ID, LOS, SEQ_NUM)
 
 # Write cleaned icu stays to csv
 write.csv(icu_stays_clean, "data/raw/cleaned/ICUSTAYS_clean.csv", row.names = FALSE)
