@@ -2831,6 +2831,8 @@ rm(results_selected_procedures, results_procedures_without_duration)
 
 ```
 
+All analyzed procedures, including CHEST_X_RAY, EXTUBATION, INTUBATION, ARTERIAL LINE, DIALYSIS – CRRT, INVASIVE VENTILATION, and MULTI LUMEN, showed significant associations with survival outcomes based on the Mann-Whitney U Test (p < 0.05). This suggests that these procedures potentially influence survival probability and may serve as valuable predictors in future survival modeling. Including these variables in future models could enhance the accuracy of survival predictions, especially in critical care contexts
+
 ### 8.4.2. Outcome 2: Length of Survival by Prescriptions
 
 ```{r Length of Survival by Prescriptions Exploratory analysis}
@@ -2971,7 +2973,7 @@ rm(procedures_binary_survival_outcome_flags, procedures_with_duration_survival_o
 rm(procedure_labels, procedure_labels_binary)
 ```
 
-
+All analyzed procedures should be included in predictive survival models, as their HRs provide valuable insights into patient severity and outcomes except DIALYSIS. Special attention should be given to procedures like INTUBATION and INVASIVE VENTILATION, which strongly correlate with higher risk, as they may serve as critical predictors of poor survival
 
 ### 8.4.3. Outcome 3: Length of ICU Stay by Procedures Data
 
@@ -3039,6 +3041,10 @@ rm(procedure_labels_duration, procedures_with_duration_los_outcome)
 rm(procedures, procedures_binary, procedures_binary_los_outcome_flags, procedures_long, procedures_with_duration, procedures_with_duration_death_outcome,  results_procedures_without_duration_LOS, results_procedures_with_duration_LOS)
 ```
 
+From the analysis of the mixed-effects linear model on the Length of Stay (LOS) outcome, the procedures "CHEST_X_RAY," "EXTUBATION," "INTUBATION," "ARTERIAL LINE," "INVASIVE VENTILATION," and "MULTI LUMEN" all showed statistically significant associations, with p-values less than 0.05. This suggests that these procedures could have an influence on LOS and may be valuable to include in future predictive models. 
+
+On the other hand, "DIALYSIS - CRRT" showed predominantly non-significant results, indicating that it may not be a strong predictor of LOS in the context of this analysis. Therefore, it might be less critical for inclusion in future modeling efforts.
+
 # Result Table
 
 ```{r result table}
@@ -3050,17 +3056,21 @@ data <- data.frame(
     "Admission type", "Marital Status", "Insurance", "Religion", "Ethnicity",
     "Diagnoses", "Number of diagnoses", "Key Diagnose", "All Diagnoses", 
     "Isolations", "TELE", "RESP", "CDIFF", "MRSA", "VRE",
-    "Prescriptions", "Number of prescriptions", "ATC", "Generic names"
+    "Prescriptions", "Number of prescriptions", "ATC", "Generic names",
+    "Procedures", "CHEST_X_RAY", "EXTUBATION", "INTUBATION", "ARTERIAL LINE", "INVASIVE VENTILATION", "DIALYSIS - CRRT"
   ),
   Death_Status = c("", "+", "+", "+", "+", "+", "+", "+", "", "+", "+", "+", 
                    "", "+", "-", "+", "+", "+",
-                   "", "+", "+", "+"),
+                   "", "+", "+", "+",
+                   "", "+", "+", "+", "+", "+", "+"),
   Survival = c("", "+", "+", "+", "+", "+", "+", "+", "", "", "Not estimated", "Not estimated", 
                "", "+", "-", "+", "-", "+",
-               "", "+", "Not estimated", "Not estimated"),
+               "", "+", "Not estimated", "Not estimated",
+               "", "+", "+", "+", "+", "+", "-"),
   LOS = c("", "-", "+", "+", "-", "+", "+", "-", "", "", "Not estimated", "Not estimated",
           "", "-", "-", "+", "+", "+",
-          "", "+", "Not estimated", "Not estimated")
+          "", "+", "Not estimated", "Not estimated",
+          "", "+", "+", "+", "+", "+", "-")
 )
 
 # Replace empty cells with NA for proper vertical merging
