@@ -76,6 +76,10 @@ procedureevents_clean <- procedureevents_clean %>%
   mutate(SEQ_NUM = row_number()) %>%
   ungroup()
 
+# Create composed Subject_id
+procedureevents_clean <- procedureevents_clean %>%
+  mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
 # Remove the STARTTIME and ENDTIME columns
 procedureevents_clean <- procedureevents_clean %>%
   select(-STARTTIME, -ENDTIME)

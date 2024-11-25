@@ -554,7 +554,7 @@ ggplot(LOS_outcome, aes(x = "", y = LOS)) +
   labs(title = "Violin Plot of Length of ICU Stay (LOS)",
        y = "Length of ICU Stay (Days)",
        x = "") +
-  theme_minimal()
+  theme_custom
 
 ```
 
@@ -1720,7 +1720,7 @@ ggplot(isolations_long, aes(x = factor(Isolation_Flag), y = SURVIVAL, fill = fac
   labs(title = "Survival Time by Bacterial Infection Requests (Isolation Flags)",
        x = "Isolation Flag (0 = No, 1 = Yes)", y = "Survival Time (Days)") +
   scale_fill_manual(values = c(color_palette[6], color_palette[10]), labels = c("No Infection", "Infection Detected")) +
-  theme_minimal() +
+  theme_custom +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 rm(isolations_long)
@@ -1750,7 +1750,7 @@ ggplot(isolations_long, aes(x = factor(Isolation_Flag), y = LOS, fill = factor(I
   labs(title = "Survival Time by Bacterial Infection Requests (Isolation Flags)",
        x = "Isolation Flag (0 = No, 1 = Yes)", y = "Survival Time (Days)") +
   scale_fill_manual(values = c(color_palette[9], color_palette[15]), labels = c("No Infection", "Infection Detected")) +
-  theme_minimal() +
+  theme_custom +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 rm(isolations_long)
@@ -2376,21 +2376,668 @@ PRESCRIPTIONS_NUM is a significant predictor for the length of ICU stay based on
 
 PRESCRIPTIONS_NUM should be included in future models for ICU stay prediction.
 
+# 7. Laborotory Analyses Data (Blood)
+# 7.1. Read data
+
+``` {r read data prescriptions}
+labs_blood <- read.csv("../data/raw/cleaned/LABEVENTS_clean.csv", stringsAsFactors = TRUE) %>%
+  filter(FLUID == "BLOOD") %>%
+  mutate(across(where(is.character), as.factor))  %>%
+  filter(SUBJECT_ID %in% subject_ids_adults) %>%
+    filter(HADM_ID != 0 ) %>%
+  select(-ITEMID) %>%
+  mutate(SUBJECT_ID = as.factor(SUBJECT_ID))
+
+
+skimr::skim(labs_blood %>%
+  select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -CHARTTIME))
+```
+## 7.2.   Descriptive Statistics
+### 7.2.1. Descriptive statistics for categorical variables (Laboratory Data (Blood))
+
+```{r Descriptive statistics for procedures for categorical vars}
+# Clean and summarize the categorical data for all factor variables
+labs_blood %>%
+  select(LABEL, CATEGORY) %>%
+  select(where(is.factor)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, desc(n)) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+## 7.3. Visualisation Analysis by Outcome
+### 7.3.1. Outcome 1: Death Status by Laboratory Data (Blood)
+#### 7.3.1.1. Blood Gas
+
+``` {r Outcome 1: Death Status by Laboratory Data (Blood Gas) }
+labs_blood_gas <- labs_blood %>%
+  filter(CATEGORY == "BLOOD GAS")
+
+```
+
+#### 7.3.1.2. Hematology
+
+
+#### 7.3.1.3. Blood Chemistry
+
+### 7.3.2. Outcome 1: Death Status by Laboratory Data (Blood)
+#### 7.3.2.1. Blood Gas
+
+#### 7.3.2.2. Hematology
+
+
+#### 7.3.2.3. Blood Chemistry
+
+### 7.3.3. Outcome 1: Death Status by Laboratory Data (Blood)
+#### 7.3.3.1. Blood Gas
+
+#### 7.3.3.2. Hematology
+
+
+#### 7.3.3.3. Blood Chemistry
+
+# 8. Procedures Data
+# 8.1. Read data
+
+``` {r read data prescriptions}
+procedures <- read.csv("../data/raw/cleaned/PROCEDURES_clean.csv", stringsAsFactors = TRUE) %>%
+  mutate(across(where(is.character), as.factor))  %>%
+  filter(SUBJECT_ID %in% subject_ids_adults) %>%
+  mutate(SUBJECT_ID = as.factor(SUBJECT_ID),
+         ICUSTAY_ID = as.factor(ICUSTAY_ID))
+
+skimr::skim(procedures %>%
+              select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -ICUSTAY_ID))
+```
+
+
+## 8.2. Desriptive Statistics
+
+### 8.2.1. Descriptive Statistics for Numerical Variables (Procedures data)
+
+```{r descriptive statistics for numerical vars procedures}
+# Summarize the statistics for each numeric variable
+procedures %>%
+  select(SEQ_NUM) %>%
+  select(where(is.numeric)) %>% 
+  summarise(across(everything(), statistics)) %>%
+  pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
+  rename(`Value` = value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  width(j = c("Variable", "Stat", "Value"), width = 2) %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+### 8.2.2. Descriptive Statistics for Categorical Variables (Procedures data)
+
+```{r Descriptive statistics for procedures for categorical vars}
+# Clean and summarize the categorical data for all factor variables
+procedures %>%
+  select(LABEL, ORDERCATEGORYNAME) %>%
+  select(where(is.factor)) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Value") %>%
+  group_by(Variable, Value) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(Variable) %>%
+  mutate(`No data` = sum(is.na(Value)),
+         `% by group` = (n / sum(n)) * 100) %>%
+  ungroup() %>%
+  select(Variable, Value, n, `% by group`, `No data`) %>%
+  arrange(Variable, desc(n)) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+Decided to focus on following procedures:
+
+- CHEST X-RAY
+- INVASIVE VENTILATION (min)
+- EXTUBATION
+- INTUBATION
+- ARTERIAL LINE (min)
+- MULTI LUMEN (min)
+- DIALYSIS - CRRT (min)
+
+## 8.3. Visualisation Analysis by Outcome
+### 8.3.1. Outcome 1: Death Status by Procedures Data
+#### 8.3.1.1. Procedures with duration
+
+``` {r Outcome 1: Death Status by Procedures Data}
+
+procedures_with_duration <- procedures %>%
+  filter(LABEL %in% c("INVASIVE VENTILATION", 
+                      "ARTERIAL LINE", 
+                      "MULTI LUMEN", 
+                      "DIALYSIS - CRRT")) %>%
+  mutate(DURATION_MIN = as.numeric(VALUE)) %>%  # Ensure duration is numeric
+  filter(!is.na(DURATION_MIN))  # Remove rows with missing durations
+
+procedures_with_duration_death_outcome <- Death_status_outcome %>%
+  left_join(procedures_with_duration, by = "SUBJECT_ID_COMPOSE") 
+
+ggplot(procedures_with_duration_death_outcome, aes(x = LABEL, y = DURATION_MIN, fill = factor(SURVIVAL_FLAG))) +
+  geom_boxplot(outlier.color = color_palette[4], outlier.size = 2) +
+  labs(
+    title = "Distribution of Duration (in Minutes) by Predictors and Survival Flag",
+    x = "Predictor",
+    y = "Duration (Minutes)",
+    fill = "Survival Flag"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(procedures_with_duration_death_outcome$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Survived", "1" = "Died")
+    ) +
+  scale_y_continuous(
+    labels = scales::comma  # Format y-axis with commas for better readability
+  ) +
+  theme_custom +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+ggplot(procedures_with_duration_death_outcome, aes(x = DURATION_MIN, fill = factor(SURVIVAL_FLAG))) +
+  geom_density(alpha = 0.6) +
+  facet_wrap(~ LABEL, scales = "free") +  # Separate density plots for each predictor
+  labs(
+    title = "Density Plot of Duration (in Minutes) by Survival Flag",
+    x = "Duration (Minutes)",
+    y = "Density",
+    fill = "Survival Flag"
+  ) +
+  scale_fill_manual(
+    values = sample(color_palette, size = length(unique(procedures_with_duration_death_outcome$SURVIVAL_FLAG)), replace = FALSE),
+    labels = c("0" = "Survived", "1" = "Died")
+    ) +
+  scale_x_continuous(
+    labels = scales::comma  # Format y-axis with commas for better readability
+  ) +
+  theme_custom +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+```
+
+#### 8.3.1.2. Procedures without Duration
+
+``` {r Death Status by Procedures Data Procedures without Duration}
+
+procedures_binary <- procedures %>%
+  filter(LABEL %in% c("CHEST X-RAY", "EXTUBATION", "INTUBATION")) %>%
+  select(SUBJECT_ID_COMPOSE, LABEL, VALUE)
+
+# Ensure all subjects have all required labels as columns
+procedures_binary_death_outcome_flags <- Death_status_outcome %>%
+  left_join(procedures_binary, by = "SUBJECT_ID_COMPOSE") %>%
+  # Generate the required columns for each LABEL
+  pivot_wider(
+    names_from = LABEL,         # Create a column for each procedure (LABEL)
+    values_from = LABEL,        # Use LABEL itself to check the condition
+    values_fn = list(LABEL = ~ unique(.)), # Ensure one unique value per cell
+    values_fill = NA            # Fill missing with NA for now
+  ) %>%
+  select(-VALUE, -`NA`) %>%
+  # Replace NA with 0, otherwise set 1 in EXTUBATION, INTUBATION, and CHEST_X_RAY
+  mutate(
+    CHEST_X_RAY = if_else(is.na(`CHEST X-RAY`), 0, 1),
+    EXTUBATION = if_else(is.na(EXTUBATION), 0, 1),
+    INTUBATION = if_else(is.na(INTUBATION), 0, 1)
+  ) %>%
+  select(-`CHEST X-RAY`)
+  
+# Transform the data to long format for easier visualization
+procedures_long <- procedures_binary_death_outcome_flags %>%
+  pivot_longer(
+    cols = c(CHEST_X_RAY, EXTUBATION, INTUBATION),  # Columns to reshape
+    names_to = "Procedure",                        # New column for procedure names
+    values_to = "Performed"                        # Binary flag: 0 or 1
+  )
+
+# Create a grouped bar plot
+ggplot(procedures_long, aes(x = Procedure, fill = factor(Performed))) +
+  geom_bar(position = "dodge", aes(y = ..count..), color = "black") +
+  facet_wrap(~ SURVIVAL_FLAG, labeller = labeller(SURVIVAL_FLAG = c("0" = "Survived", "1" = "Died"))) +
+  scale_fill_manual(
+    values = c("0" = color_palette[3], "1" = color_palette[5]),
+    labels = c("0" = "Not Performed", "1" = "Performed")
+  ) +
+  labs(
+    title = "Distribution of Procedures by Survival Status",
+    x = "Procedure",
+    y = "Count",
+    fill = "Performed"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+### 8.3.2. Outcome 2: Length of Survival by Procedures Data
+#### 8.3.2.1. Procedures with duration
+
+```{r Length of Survival by Prescriptions Data Procedures with duration}
+procedures_with_duration_survival_outcome <- Survival_outcome %>%
+  left_join(procedures_with_duration, by = "SUBJECT_ID_COMPOSE")
+  
+ggplot(procedures_with_duration_survival_outcome, aes(x = LABEL, y = SURVIVAL, fill = LABEL)) +
+  geom_boxplot(outlier.color = color_palette[8], outlier.size = 2, alpha = 0.6) +
+  labs(
+    title = "Distribution of Survival by Procedures with Duration",
+    x = "Procedure",
+    y = "Survival (Days)"
+  ) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(procedures_with_duration_survival_outcome$LABEL)), replace = FALSE)) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+  
+```
+
+#### 8.3.2.2. Procedures without Duration
+```{r Length of Survival by Prescriptions Data Procedures without duration}
+
+procedures_binary_survival_outcome_flags <- Survival_outcome %>%
+  left_join(procedures_binary, by = "SUBJECT_ID_COMPOSE") %>%
+  # Pivot the data to wide format, turning LABEL rows into columns
+  pivot_wider(
+    names_from = LABEL,         # Use LABEL as column names
+    values_from = VALUE,        # Fill columns with VALUE (indicates performed or not)
+    values_fn = list(LABEL = ~ unique(.)), # Ensure one unique value per cell
+    values_fill = NA            # Fill missing with NA for now
+  ) %>%
+  select(-`NA`) %>%
+  # Replace NA with 0, otherwise set 1 in EXTUBATION, INTUBATION, and CHEST_X_RAY
+  mutate(
+    CHEST_X_RAY = if_else((`CHEST X-RAY` == "NULL"), 0, 1),
+    EXTUBATION = if_else((EXTUBATION == "NULL"), 0, 1),
+    INTUBATION = if_else((INTUBATION == "NULL"), 0, 1)
+  ) %>%
+  select(-`CHEST X-RAY`, -SUBJECT_ID)
+
+# Transform the data into long format for visualization
+procedures_long <- procedures_binary_survival_outcome_flags %>%
+  pivot_longer(
+    cols = c(CHEST_X_RAY, EXTUBATION, INTUBATION),  # Procedures to include
+    names_to = "Procedure",                        # Column for procedure names
+    values_to = "Performed"                        # Binary flag (0 or 1)
+  )
+
+# Create a boxplot
+ggplot(procedures_long, aes(x = factor(Performed), y = SURVIVAL, fill = Procedure)) +
+  geom_boxplot(outlier.color = color_palette[5], outlier.shape = 16, outlier.size = 2) +
+  facet_wrap(~ Procedure, scales = "free_x") +  # Separate plots for each procedure
+  scale_fill_manual(values = sample(color_palette, size = length(unique(procedures_long$Procedure)))) +
+  labs(
+    title = "Survival (Days) Distribution by Procedure Performed",
+    x = "Procedure Performed (0 = Not Performed, 1 = Performed)",
+    y = "Survival (Days)",
+    fill = "Procedure"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+### 8.4.3. Outcome 3: Length of ICU Stay by Procedures Data
+#### 8.3.3.1. Procedures with duration
+``` {r Length of ICU Stay by Procedures Data Procedures with duration}
+procedures_with_duration_los_outcome <- LOS_outcome %>%
+  left_join(procedures_with_duration, by = "SUBJECT_ID_COMPOSE")
+  
+ggplot(procedures_with_duration_los_outcome, aes(x = LABEL, y = LOS, fill = LABEL)) +
+  geom_boxplot(outlier.color = color_palette[8], outlier.size = 2, alpha = 0.6) +
+  labs(
+    title = "Distribution of LOS by Procedures with Duration",
+    x = "Procedure",
+    y = "LOS (Days)"
+  ) +
+  scale_fill_manual(values = sample(color_palette, size = length(unique(procedures_with_duration_los_outcome$LABEL)), replace = FALSE)) +
+  theme_custom +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+
+#### 8.3.3.2. Procedures without Duration
+``` {r Length of ICU Stay by Procedures Data Procedures without duration}
+
+procedures_binary_los_outcome_flags <- LOS_outcome %>%
+  left_join(procedures_binary, by = "SUBJECT_ID_COMPOSE") %>%
+  # Pivot the data to wide format, turning LABEL rows into columns
+  pivot_wider(
+    names_from = LABEL,         # Use LABEL as column names
+    values_from = VALUE,        # Fill columns with VALUE (indicates performed or not)
+    values_fn = list(LABEL = ~ unique(.)), # Ensure one unique value per cell
+    values_fill = NA            # Fill missing with NA for now
+  ) %>%
+  select(-`NA`) %>%
+  # Replace NA with 0, otherwise set 1 in EXTUBATION, INTUBATION, and CHEST_X_RAY
+  mutate(
+    CHEST_X_RAY = if_else((`CHEST X-RAY` == "NULL"), 0, 1),
+    EXTUBATION = if_else((EXTUBATION == "NULL"), 0, 1),
+    INTUBATION = if_else((INTUBATION == "NULL"), 0, 1)
+  ) %>%
+  select(-`CHEST X-RAY`, -SUBJECT_ID)
+
+# Transform the data into long format for visualization
+procedures_long <- procedures_binary_los_outcome_flags %>%
+  pivot_longer(
+    cols = c(CHEST_X_RAY, EXTUBATION, INTUBATION),  # Procedures to include
+    names_to = "Procedure",                        # Column for procedure names
+    values_to = "Performed"                        # Binary flag (0 or 1)
+  )
+
+# Create a boxplot
+ggplot(procedures_long, aes(x = factor(Performed), y = LOS, fill = Procedure)) +
+  geom_boxplot(outlier.color = color_palette[20], outlier.shape = 16, outlier.size = 2) +
+  facet_wrap(~ Procedure, scales = "free_x") +  # Separate plots for each procedure
+  scale_fill_manual(values = sample(color_palette, size = length(unique(procedures_long$Procedure)))) +
+  labs(
+    title = "LOS (Days) Distribution by Procedure Performed",
+    x = "Procedure Performed (0 = Not Performed, 1 = Performed)",
+    y = "LOS (Days)",
+    fill = "Procedure"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
+## 8.4. Exploratory analysis
+### 8.4.1. Outcome 1: Death Status by Procedures Data
+
+```{r Death Status by Procedures Data Exploratory Analysis}
+
+# List of procedures to analyze
+procedure_labels <- c("INVASIVE VENTILATION", "ARTERIAL LINE", "MULTI LUMEN", "DIALYSIS - CRRT")
+
+# Perform statistical tests for each procedure
+results_selected_procedures <- procedures_with_duration_death_outcome %>%
+  filter(LABEL %in% procedure_labels) %>%  # Filter for specified procedures
+  group_split(LABEL) %>%  # Split the data by LABEL
+  map_df(~ {
+    perform_statistical_tests(
+      data = .x,
+      dependent_var = "SURVIVAL_FLAG",
+      independent_var = "VALUE",
+      variable_name = unique(.x$LABEL)
+    )
+  })
+
+# Check hypothesis for procedures without duration 
+# List of procedures without duration
+procedure_labels_binary <- c("CHEST_X_RAY", "EXTUBATION", "INTUBATION")
+
+# Perform statistical tests for each procedure
+results_procedures_without_duration <- procedures_binary_death_outcome_flags %>%
+  pivot_longer(
+    cols = all_of(procedure_labels_binary),  # Select relevant procedure columns
+    names_to = "LABEL",                     # Create a new column for procedure names
+    values_to = "Performed"                 # Binary flag: 0 or 1
+  ) %>%
+  group_split(LABEL) %>%  # Split the data by LABEL
+  map_df(~ {
+    perform_statistical_tests(
+      data = .x,
+      dependent_var = "SURVIVAL_FLAG",
+      independent_var = "Performed",
+      variable_name = unique(.x$LABEL)
+    )
+  })
+
+# Print the results
+print(bind_rows(results_procedures_without_duration,results_selected_procedures ))
+
+# Clean up intermediate variables for procedures without duration
+rm(procedure_labels_binary, procedures_binary_death_outcome_flags)
+
+# Clean up all intermediate results
+rm(results_selected_procedures, results_procedures_without_duration)
+
+```
+
+### 8.4.2. Outcome 2: Length of Survival by Prescriptions
+
+```{r Length of Survival by Prescriptions Exploratory analysis}
+
+# Generate Kaplan-Meier survival curve by number of drugs
+fit_procedures_X_RAY <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ CHEST_X_RAY, data = procedures_binary_survival_outcome_flags)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_procedures_X_RAY,
+  data = procedures_binary_survival_outcome_flags,
+  pval = TRUE,  # Display p-value for drug number
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "CHEST_X_RAY",
+  title = "Survival Curve by CHEST_X_RAY",
+  palette = color_palette
+)
+
+fit_procedures_EXTUBATION <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ EXTUBATION, data = procedures_binary_survival_outcome_flags)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_procedures_EXTUBATION,
+  data = procedures_binary_survival_outcome_flags,
+  pval = TRUE,  # Display p-value for drug number
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Extubation",
+  title = "Survival Curve by Extubation",
+  palette = color_palette
+)
+
+fit_procedures_INTUBATION <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ INTUBATION, data = procedures_binary_survival_outcome_flags)
+
+# Plot the Kaplan-Meier curve
+ggsurvplot(
+  fit_procedures_INTUBATION,
+  data = procedures_binary_survival_outcome_flags,
+  pval = TRUE,  # Display p-value for drug number
+  conf.int = TRUE,  # Add confidence intervals
+  ggtheme = theme_custom,
+  surv.median.line = "hv",
+  legend.title = "Intubation",
+  title = "Survival Curve by Intubation",
+  palette = color_palette
+)
+
+# Perform Hazard Ratio (HR) assessment
+hr_table_X_RAY <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "CHEST_X_RAY", procedures_binary_survival_outcome_flags)
+
+hr_table_EXTUBATION <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "EXTUBATION", procedures_binary_survival_outcome_flags)
+
+hr_table_INTUBATION <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "INTUBATION", procedures_binary_survival_outcome_flags)
+
+# Filter and analyze procedures with duration
+km_results_procedures <- procedures_with_duration_survival_outcome %>%
+  filter(LABEL %in% procedure_labels) %>%  # Filter for specific procedures
+  group_split(LABEL) %>%  # Split the data by LABEL
+  map(~ {
+    # Handle cases with insufficient or constant values
+    if (n_distinct(.x$VALUE, na.rm = TRUE) > 3) {
+      .x <- .x %>%
+        mutate(Quartile = cut(
+          VALUE,
+          breaks = quantile(.x$VALUE, probs = 0:4/4, na.rm = TRUE),
+          include.lowest = TRUE,
+          labels = c("Q1", "Q2", "Q3", "Q4")  # Label quartiles
+        ))
+      
+      fit <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ Quartile, data = .x)
+      
+      # Create the Kaplan-Meier plot
+      ggsurvplot(
+        fit,
+        data = .x,
+        pval = TRUE,
+        conf.int = TRUE,
+        title = paste("Kaplan-Meier Survival Curve for", unique(.x$LABEL)),
+        legend.title = "Quartiles",
+        xlab = "Survival (Days)",
+        ylab = "Survival Probability",
+        palette = color_palette
+      )
+    } else {
+      message(paste("Skipping", unique(.x$LABEL), "due to insufficient unique values"))
+      NULL
+    }
+  })
+
+# Filter out NULL results (cases with insufficient unique values)
+km_results_procedures <- km_results_procedures[!sapply(km_results_procedures, is.null)]
+
+# Print all Kaplan-Meier plots
+for (plot in km_results_procedures) {
+  print(plot)
+}
+
+# Divide procedure durations into quintiles and perform HR assessment
+hr_results_procedures_with_quintiles <- procedures_with_duration_survival_outcome %>%
+  filter(LABEL %in% procedure_labels) %>%  # Filter for specified procedures
+  group_split(LABEL) %>%  # Split the data by LABEL
+  map_df(~ {
+    # Add quintiles for VALUE (duration)
+    .x <- .x %>%
+      mutate(
+        Quintile = cut(
+          VALUE,
+          breaks = quantile(VALUE, probs = seq(0, 1, 0.2), na.rm = TRUE),
+          include.lowest = TRUE,
+          paste(c("Q1", "Q2", "Q3", "Q4", "Q5"), unique(.x$LABEL), sep = " _ ")
+        )
+      )
+    
+    # Perform HR assessment using the Quintile variable
+    HR_assessment(
+      survival_time = "SURVIVAL",
+      event_status = "SURVIVAL_FLAG",
+      predictors = "Quintile",
+      data = .x
+    ) 
+  })
+
+# Print the combined HR results
+print(bind_rows(hr_table_X_RAY, hr_table_EXTUBATION, hr_table_INTUBATION, hr_results_procedures_with_quintiles))
+
+# Clean up Kaplan-Meier and Hazard Ratio variables
+rm(fit_procedures_X_RAY, fit_procedures_EXTUBATION, fit_procedures_INTUBATION)
+rm(hr_table_X_RAY, hr_table_EXTUBATION, hr_table_INTUBATION)
+rm(km_results_procedures, hr_results_procedures_with_quintiles)
+
+# Clean up intermediate datasets
+rm(procedures_binary_survival_outcome_flags, procedures_with_duration_survival_outcome)
+
+# Clean up lists of procedure labels
+rm(procedure_labels, procedure_labels_binary)
+```
 
 
 
+### 8.4.3. Outcome 3: Length of ICU Stay by Procedures Data
 
+``` {r Length of ICU Stay by Procedures Data Exploratory analysis }
+# List of procedures without duration
+procedure_labels_binary <- c("CHEST_X_RAY", "EXTUBATION", "INTUBATION")
 
+results_procedures_without_duration_LOS <- procedures_binary_los_outcome_flags %>%
+  pivot_longer(
+    cols = all_of(procedure_labels_binary),  # Select relevant procedure columns
+    names_to = "LABEL",                     # Create a new column for procedure names
+    values_to = "Performed"                 # Binary flag: 0 or 1
+  ) %>%
+  group_split(LABEL) %>%  # Split the data by LABEL
+  map_df(~ {
+    # Extract the LABEL name for the current group
+    label_name <- unique(.x$LABEL)
+    
+    # Perform LOS analysis
+    analyze_predictor_LOS(
+      data = .x,
+      predictor = "Performed",
+      LOS = "LOS",
+      patient_id = "SUBJECT_ID_COMPOSE"
+    ) %>%
+    mutate(Procedure = label_name)  # Add the LABEL name to the results
+  })
 
+# List of procedures with duration
+procedure_labels_duration <- c("INVASIVE VENTILATION", "ARTERIAL LINE", "MULTI LUMEN", "DIALYSIS - CRRT")
 
+# Perform analysis for procedures with durations split by quintiles
+results_procedures_with_duration_LOS <- procedures_with_duration_los_outcome %>%
+  filter(LABEL %in% procedure_labels_duration) %>%  # Filter for specified procedures
+  group_split(LABEL) %>%  # Split the data by LABEL
+  map_df(~ {
+    # Add quintiles for VALUE (duration)
+    .x <- .x %>%
+      mutate(
+        Quintile = cut(
+          VALUE,
+          breaks = quantile(VALUE, probs = seq(0, 1, 0.2), na.rm = TRUE),
+          include.lowest = TRUE,
+          labels = c("Q1", "Q2", "Q3", "Q4", "Q5")
+        )
+      )
+    
+    # Perform LOS analysis using Quintile
+    analyze_predictor_LOS(
+      data = .x,
+      predictor = "Quintile",
+      LOS = "LOS",
+      patient_id = "SUBJECT_ID_COMPOSE"
+    )  %>%
+    mutate(Procedure = unique(.x$LABEL))
+  })
 
+# Print the results
+print(bind_rows(results_procedures_without_duration_LOS, results_procedures_with_duration_LOS))
 
+# Cleanup for procedures with duration
+rm(procedure_labels_duration, procedures_with_duration_los_outcome)
 
-
-
-
-
-
+# Cleanup all intermediate results
+rm(procedures, procedures_binary, procedures_binary_los_outcome_flags, procedures_long, procedures_with_duration, procedures_with_duration_death_outcome,  results_procedures_without_duration_LOS, results_procedures_with_duration_LOS)
+```
 
 # Result Table
 

@@ -234,6 +234,10 @@ LABS_VALUE <- labs_clean %>%
   select (VALUE, VALUENUM, VALUEUOM, LABEL, CATEGORY) %>%
   distinct()
 
+# Create composed Subject_id
+labs_clean <- labs_clean %>%
+  mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
 # Write cleaned admissions to csv
 write.csv(labs_clean, "data/raw/cleaned/LABEVENTS_clean.csv", row.names = FALSE)
 
