@@ -180,8 +180,8 @@ labs_clean <- labs_clean %>%
 
 # Add seq_num for each analysis
 labs_clean <- labs_clean %>%
-  arrange(SUBJECT_ID, CATEGORY, CHARTTIME) %>%  # Ensure data is sorted by PatientID, Category, and Time
-  group_by(SUBJECT_ID, CATEGORY, CHARTTIME) %>%  # Group by PatientID, Category, and Time
+  arrange(SUBJECT_ID, HADM_ID, CATEGORY, CHARTTIME) %>%  # Ensure data is sorted by PatientID, Category, and Time
+  group_by(SUBJECT_ID, HADM_ID, CATEGORY, CHARTTIME) %>%  # Group by PatientID, Category, and Time
   mutate(
     SEQ_NUM = row_number()  # Create a sequence within each group starting from 1
   ) %>%

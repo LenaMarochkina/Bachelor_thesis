@@ -2377,16 +2377,23 @@ PRESCRIPTIONS_NUM is a significant predictor for the length of ICU stay based on
 PRESCRIPTIONS_NUM should be included in future models for ICU stay prediction.
 
 # 7. Laborotory Analyses Data (Blood)
-# 7.1. Read data
+## 7.1. Read data
 
-``` {r read data prescriptions}
+``` {r read data blood analyses}
 labs_blood <- read.csv("../data/raw/cleaned/LABEVENTS_clean.csv", stringsAsFactors = TRUE) %>%
+  group_by(SUBJECT_ID_COMPOSE, SUBJECT_ID, HADM_ID) %>%
+  mutate(VISIT_NUM = cumsum(SEQ_NUM == 1),
+         VISIT_NUM = if_else(VISIT_NUM == 0, cumsum(SEQ_NUM == 2), VISIT_NUM),
+         VISIT_NUM = if_else(VISIT_NUM == 0, cumsum(SEQ_NUM == 3), VISIT_NUM)
+         ) %>%
+  # check if VISIT_NUM == 0 cumsum(SEQ_NUM == 2)
+  ungroup() %>%
   filter(FLUID == "BLOOD") %>%
   mutate(across(where(is.character), as.factor))  %>%
   filter(SUBJECT_ID %in% subject_ids_adults) %>%
     filter(HADM_ID != 0 ) %>%
-  select(-ITEMID) %>%
-  mutate(SUBJECT_ID = as.factor(SUBJECT_ID))
+  select(-ITEMID)
+  
 
 
 skimr::skim(labs_blood %>%
@@ -2395,7 +2402,7 @@ skimr::skim(labs_blood %>%
 ## 7.2.   Descriptive Statistics
 ### 7.2.1. Descriptive statistics for categorical variables (Laboratory Data (Blood))
 
-```{r Descriptive statistics for procedures for categorical vars}
+```{r Descriptive statistics for procedures for categorical vars (Laboratory Data (Blood)}
 # Clean and summarize the categorical data for all factor variables
 labs_blood %>%
   select(LABEL, CATEGORY) %>%
@@ -2420,11 +2427,165 @@ labs_blood %>%
 ### 7.3.1. Outcome 1: Death Status by Laboratory Data (Blood)
 #### 7.3.1.1. Blood Gas
 
-``` {r Outcome 1: Death Status by Laboratory Data (Blood Gas) }
+``` {r (Blood Gas) Data transformation}
 labs_blood_gas <- labs_blood %>%
-  filter(CATEGORY == "BLOOD GAS")
+  filter(CATEGORY == "BLOOD GAS") %>%
+  select(SUBJECT_ID_COMPOSE, CHARTTIME, LABEL, SEQ_NUM, VISIT_NUM, VALUENUM) %>%
+  distinct()
+
+labs_blood_gas <- labs_blood_gas %>%
+  pivot_wider(
+    names_from = LABEL,
+    values_from = VALUENUM,
+    values_fill = list(VALUENUM = NA)
+  ) %>%
+  select(-CHARTTIME, -INTUBATED, -`SPECIMEN TYPE`) %>%
+  distinct()
+
+labs_blood_gas_combined <- labs_blood_gas %>%
+  group_by(SUBJECT_ID_COMPOSE, VISIT_NUM) %>%
+  summarise(across(
+    everything(), 
+    ~ if (all(is.na(.))) NA else na.omit(.)[1], # Keep the first non-NA value for each column
+    .names = "{.col}"
+  )) %>%
+  select(-SEQ_NUM) %>%
+  ungroup()
 
 ```
+
+``` {r Death Status by Laboratory Data (Blood Gas)}
+labs_blood_gas_death_outcome <- labs_blood_gas_combined %>%
+  left_join(Death_status_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID) %>%
+  filter(!is.na(SURVIVAL_FLAG))
+
+# Visualise how differ all numeric vars according to death status
+# Filter numeric variables with sufficient variance
+numeric_vars <- labs_blood_gas_death_outcome %>%
+  select(-SUBJECT_ID_COMPOSE, -SURVIVAL_FLAG, -VISIT_NUM) %>%
+  select(where(is.numeric)) %>%
+  summarise(across(everything(), ~ var(., na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Variance") %>%
+  filter(Variance > 0) %>%
+  pull(Variable)
+
+# Filter data for plotting
+filtered_data <- labs_blood_gas_death_outcome %>%
+  select(SUBJECT_ID_COMPOSE, VISIT_NUM, SURVIVAL_FLAG, all_of(numeric_vars)) %>%
+  group_by(SURVIVAL_FLAG, VISIT_NUM) %>%
+  summarise(across(everything(), ~ mean(., na.rm = TRUE), .names = "Mean_{.col}"), .groups = "drop")
+
+# Melt the data for easier plotting
+melted_data <- filtered_data %>%
+  pivot_longer(cols = -c(SURVIVAL_FLAG, VISIT_NUM), names_to = "Variable", values_to = "Value")
+
+# Plot density plots for each variable
+for (variable in unique(melted_data$Variable)) {
+  plot <- ggplot(melted_data %>% filter(Variable == variable), aes(x = VISIT_NUM, y = Value, color = factor(SURVIVAL_FLAG))) +
+    geom_line(size = 1) +
+    geom_point(size = 2, alpha = 0.7) +
+    scale_color_manual(values = c("0" = color_palette[4], "1" = color_palette[14])) +
+    labs(
+      title = paste("Mean of", variable, "by Visit Number and Survival Flag"),
+      x = "Visit Number",
+      y = "Mean Value",
+      color = "Survival Flag"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "top")
+  
+  # Print the plot
+  print(plot)
+}
+```
+
+
+```{r Death Status by Laboratory Data (Blood) Blood Gas }
+
+# Assuming `labs_blood_gas_death_outcome` contains numeric data and non-numeric columns to be excluded
+correlation_data <- labs_blood_gas_death_outcome %>%
+  select(where(is.numeric))
+
+# Compute the correlation matrix
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
+
+# Visualize the correlation matrix
+library(corrplot)
+
+# Plot the correlation matrix
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         number.cex = 0.3,    # Smaller text size for numbers
+         addCoef.col = "black", 
+         mar = c(1, 1, 1, 1),
+         cl.cex = 0.8,        
+         tl.cex = 0.3)   
+
+# Extract correlation values with SURVIVAL_FLAG
+correlated_vars <- correlation_matrix["SURVIVAL_FLAG", ]
+
+# Select variables with absolute correlation > 0.2 (example threshold)
+significant_vars <- names(correlated_vars[abs(correlated_vars) > 0.195])
+
+# Print the selected variables
+print(significant_vars)
+
+# Define predictors to evaluate
+predictors <- c("LACTATE", "REQUIRED O2")
+
+# Prepare a list to store ROC results
+roc_results <- list()
+
+# Calculate ROC for each predictor and store results
+for (predictor in predictors) {
+  roc_obj <- roc(
+    labs_blood_gas_death_outcome$SURVIVAL_FLAG,
+    labs_blood_gas_death_outcome[[predictor]],
+    plot = FALSE
+  )
+  roc_results[[predictor]] <- roc_obj
+}
+
+# Extract data for ggplot
+roc_data <- do.call(rbind, lapply(names(roc_results), function(predictor) {
+  roc_curve <- roc_results[[predictor]]
+  data.frame(
+    Sensitivity = roc_curve$sensitivities,
+    Specificity = roc_curve$specificities,
+    Predictor = predictor
+  )
+}))
+
+# Combine AUC values for annotation
+auc_values <- sapply(roc_results, function(x) auc(x))
+auc_annotation <- paste(names(auc_values), round(auc_values, 2), sep = ": ", collapse = ", ")
+
+# Plot ROC curves
+roc_plot <- ggplot(roc_data, aes(x = 1 - Specificity, y = Sensitivity, color = Predictor)) +
+  geom_line(size = 1.2) +
+  labs(
+    title = "ROC Curves for Selected Predictors",
+    x = "1 - Specificity",
+    y = "Sensitivity",
+    color = "Predictor"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  annotate("text", x = 0.7, y = 0.3, label = paste("AUC Values:\n", auc_annotation), hjust = 0.5, size= 2.7)
+
+# Print the plot
+print(roc_plot)
+```
+
+"ALVEOLAR-ARTERIAL GRADIENT", "REQUIRED O2" predictors has correlation equal to 1, so we can use only one of them ("REQUIRED O2" was chosen).
+
+ROC-curve for "LACTATE" and "REQUIRED O2" predictors 
+
+An AUC in the range 0.6-0.7: Moderate discrimination ability.
 
 #### 7.3.1.2. Hematology
 
@@ -2450,7 +2611,7 @@ labs_blood_gas <- labs_blood %>%
 # 8. Procedures Data
 # 8.1. Read data
 
-``` {r read data prescriptions}
+``` {r read data pocedures}
 procedures <- read.csv("../data/raw/cleaned/PROCEDURES_clean.csv", stringsAsFactors = TRUE) %>%
   mutate(across(where(is.character), as.factor))  %>%
   filter(SUBJECT_ID %in% subject_ids_adults) %>%
@@ -2833,9 +2994,9 @@ rm(results_selected_procedures, results_procedures_without_duration)
 
 All analyzed procedures, including CHEST_X_RAY, EXTUBATION, INTUBATION, ARTERIAL LINE, DIALYSIS – CRRT, INVASIVE VENTILATION, and MULTI LUMEN, showed significant associations with survival outcomes based on the Mann-Whitney U Test (p < 0.05). This suggests that these procedures potentially influence survival probability and may serve as valuable predictors in future survival modeling. Including these variables in future models could enhance the accuracy of survival predictions, especially in critical care contexts
 
-### 8.4.2. Outcome 2: Length of Survival by Prescriptions
+### 8.4.2. Outcome 2: Length of Survival by Procedures
 
-```{r Length of Survival by Prescriptions Exploratory analysis}
+```{r Length of Survival by Procedures Exploratory analysis}
 
 # Generate Kaplan-Meier survival curve by number of drugs
 fit_procedures_X_RAY <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ CHEST_X_RAY, data = procedures_binary_survival_outcome_flags)
