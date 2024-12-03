@@ -30,6 +30,7 @@ library(ggpubr)
 library(lme4)   
 library(lmerTest) 
 library(glmnet)
+library(pROC)
 
 
 # Custom theme for visualisations
@@ -2394,8 +2395,6 @@ labs_blood <- read.csv("../data/raw/cleaned/LABEVENTS_clean.csv", stringsAsFacto
     filter(HADM_ID != 0 ) %>%
   select(-ITEMID)
   
-
-
 skimr::skim(labs_blood %>%
   select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -CHARTTIME))
 ```
@@ -2423,9 +2422,7 @@ labs_blood %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
 
-## 7.3. Visualisation Analysis by Outcome
-### 7.3.1. Outcome 1: Death Status by Laboratory Data (Blood)
-#### 7.3.1.1. Blood Gas
+Perform data transformation.
 
 ``` {r (Blood Gas) Data transformation}
 labs_blood_gas <- labs_blood %>%
@@ -2452,7 +2449,18 @@ labs_blood_gas_combined <- labs_blood_gas %>%
   select(-SEQ_NUM) %>%
   ungroup()
 
+# Rename columns to replace spaces and commas
+labs_blood_gas_combined <- labs_blood_gas_combined %>%
+  rename_with(~ gsub(" ", "_", .)) %>%
+  rename_with(~gsub(",_", "_", .))
+
+rm(labs_blood_gas)
 ```
+
+
+## 7.3. Visualisation Analysis by Outcome
+### 7.3.1. Outcome 1: Death Status by Laboratory Data (Blood)
+#### 7.3.1.1. Blood Gas
 
 ``` {r Death Status by Laboratory Data (Blood Gas)}
 labs_blood_gas_death_outcome <- labs_blood_gas_combined %>%
@@ -2498,20 +2506,88 @@ for (variable in unique(melted_data$Variable)) {
   # Print the plot
   print(plot)
 }
+
+rm(melted_data, filtered_data, numeric_vars, plot)
 ```
 
+#### 7.3.1.2. Hematology
 
-```{r Death Status by Laboratory Data (Blood) Blood Gas }
+```{r Hematology Data transformation}
+
+```
+
+### 7.3.2. Outcome 2: Length of Survival by Laboratory Data (Blood)
+#### 7.3.2.1. Blood Gas
+
+```{r Length of Survival by Laboratory Data (Blood Gas)}
+labs_blood_gas_survival <- labs_blood_gas_combined %>%
+  left_join(Survival_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID) %>%
+  filter(!is.na(SURVIVAL)) 
+
+# Visualise each blood test parameter according to Survival Length
+
+blood_test_params <- setdiff(names(labs_blood_gas_survival), c("SURVIVAL", "SUBJECT_ID_COMPOSE", "VENTILATOR", "VISIT_NUM"))
+
+for (param in blood_test_params) {
+  ggplot(labs_blood_gas_survival, aes(x = SURVIVAL, y = .data[[param]])) +
+    stat_bin2d(bins = 50) +
+    scale_fill_gradient(low = "blue", high = "red") +
+    labs(
+      title = paste("Density Heatmap of", param, "vs Survival Length"),
+      x = "Survival Length (Days)",
+      y = param,
+      fill = "Count"
+    ) +
+    theme_minimal() -> p
+  print(p)
+}
+
+rm(blood_test_params, p)
+```
+
+### 7.3.3. Outcome 3: Length of ICU Stay by Laboratory Data (Blood)
+#### 7.3.3.1. Blood Gas
+
+```{r Length of ICU stay by Laboratory Data (Blood Gas)}
+labs_blood_gas_LOS <- labs_blood_gas_combined %>%
+  left_join(LOS_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID)
+
+# Visualise each blood test parameter according to ICU stay
+
+blood_test_params <- setdiff(names(labs_blood_gas_LOS), c("LOS", "SUBJECT_ID_COMPOSE", "VENTILATOR", "VISIT_NUM", "ICUSTAY_ID"))
+
+for (param in blood_test_params) {
+  p <- ggplot(labs_blood_gas_LOS, aes(x = LOS, y = .data[[param]])) +
+    stat_bin2d(bins = 50) +
+    scale_fill_gradient(low = "blue", high = "red") +
+    labs(
+      title = paste("Density Heatmap of", param, "vs ICU stay length"),
+      x = "ICU Stay Length (Days)",
+      y = param,
+      fill = "Count"
+    ) +
+    theme_minimal()
+  print(p)
+}
+
+rm(blood_test_params, p)
+```
+
+## 7.4. Exploratory Analysis
+### 7.4.1. Outcome 1: Death Status by Laboratory Data (Blood)
+#### 7.4.1.1. Blood Gas
+
+```{r Death Status by Laboratory Data (Blood) Blood Gas correlation matrix}
 
 # Assuming `labs_blood_gas_death_outcome` contains numeric data and non-numeric columns to be excluded
 correlation_data <- labs_blood_gas_death_outcome %>%
-  select(where(is.numeric))
+  select(where(is.numeric)) %>%
+  select(-SURVIVAL_FLAG, -VISIT_NUM)
 
 # Compute the correlation matrix
 correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
-
-# Visualize the correlation matrix
-library(corrplot)
 
 # Plot the correlation matrix
 corrplot(correlation_matrix, 
@@ -2519,23 +2595,29 @@ corrplot(correlation_matrix,
          type = "upper", 
          tl.col = "black", 
          tl.srt = 45, 
-         number.cex = 0.3,    # Smaller text size for numbers
+         number.cex = 0.3,  
          addCoef.col = "black", 
          mar = c(1, 1, 1, 1),
          cl.cex = 0.8,        
          tl.cex = 0.3)   
 
-# Extract correlation values with SURVIVAL_FLAG
-correlated_vars <- correlation_matrix["SURVIVAL_FLAG", ]
+rm(correlation_data, correlation_matrix)
+```
 
-# Select variables with absolute correlation > 0.2 (example threshold)
-significant_vars <- names(correlated_vars[abs(correlated_vars) > 0.195])
+Predictors like contain nearly identical information:
+- Hemoglobin and Hematocrit, calculated correlation is equal to 1
+- pO2 and ALVEOLAR-ARTERIAL GRADIENT calculated correlation is equal to -0.92
+- pO2 and Required O2 calculated correlation is equal to -0.92
+- Calculated bicarbonate and calculated total CO2 calculated correlation is equal to 0.97
+- Base excess and calculated total CO2 calculated correlationis equal to 0.92
 
-# Print the selected variables
-print(significant_vars)
+ Multicollinearity can lead to unstable or unreliable coefficient estimates.
+ 
+Predictors to remove: Hematocrit, ALVEOLAR-ARTERIAL GRADIENT, Required O2, calculated total CO2.
 
+```{r Death Status by Laboratory Data (Blood) Blood Gas linear regression}
 # Define predictors to evaluate
-predictors <- c("LACTATE", "REQUIRED O2")
+predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "GLUCOSE", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
 
 # Prepare a list to store ROC results
 roc_results <- list()
@@ -2564,44 +2646,230 @@ roc_data <- do.call(rbind, lapply(names(roc_results), function(predictor) {
 auc_values <- sapply(roc_results, function(x) auc(x))
 auc_annotation <- paste(names(auc_values), round(auc_values, 2), sep = ": ", collapse = ", ")
 
-# Plot ROC curves
-roc_plot <- ggplot(roc_data, aes(x = 1 - Specificity, y = Sensitivity, color = Predictor)) +
-  geom_line(size = 1.2) +
-  labs(
-    title = "ROC Curves for Selected Predictors",
-    x = "1 - Specificity",
-    y = "Sensitivity",
-    color = "Predictor"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "bottom") +
-  annotate("text", x = 0.7, y = 0.3, label = paste("AUC Values:\n", auc_annotation), hjust = 0.5, size= 2.7)
+# Generate individual ROC plots for each predictor
+for (predictor in names(roc_results)) {
+  # Extract ROC data for the predictor
+  roc_curve <- roc_results[[predictor]]
+  auc_value <- round(auc(roc_curve), 3)
+  
+  # Prepare data for plotting
+  roc_data <- data.frame(
+    Sensitivity = roc_curve$sensitivities,
+    Specificity = roc_curve$specificities
+  )
+  
+  # Create the ROC plot for the current predictor
+  roc_plot <- ggplot(roc_data, aes(x = 1 - Specificity, y = Sensitivity)) +
+    geom_line(color = "pink", size = 1.2) +
+    labs(
+      title = paste("ROC Curve for", predictor),
+      subtitle = paste("AUC =", auc_value),
+      x = "1 - Specificity",
+      y = "Sensitivity"
+    ) +
+    theme_minimal()
+  
+  # Print the plot for the current predictor
+  print(roc_plot)
+}
 
-# Print the plot
-print(roc_plot)
+# Categorize AUC interpretation based on performance
+auc_interpretation <- function(auc) {
+  if (auc >= 0.9) {
+    return("Outstanding")
+  } else if (auc >= 0.8) {
+    return("Excellent")
+  } else if (auc >= 0.7) {
+    return("Acceptable")
+  } else if (auc >= 0.6) {
+    return("Poor")
+  } else {
+    return("No Discrimination")
+  }
+}
+
+# Add interpretation to the AUC table
+auc_table <- data.frame(
+  Predictor = names(auc_values),
+  AUC = round(auc_values, 3),
+  Interpretation = sapply(auc_values, auc_interpretation)
+)
+
+# Print the table in the console
+print(auc_table)
+
+rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
 ```
 
-"ALVEOLAR-ARTERIAL GRADIENT", "REQUIRED O2" predictors has correlation equal to 1, so we can use only one of them ("REQUIRED O2" was chosen).
+In the provided table, the following predictors should be included in future modeling:
+BASE EXCESS: AUC = 0.623
+LACTATE: AUC = 0.658
+VENTILATION RATE: AUC = 0.610
 
-ROC-curve for "LACTATE" and "REQUIRED O2" predictors 
+```{r Death Status by Laboratory Data (Blood) Blood Gas stat test}
+# Define predictors to evaluate
+predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", 
+                "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "GLUCOSE", 
+                "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", 
+                "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", 
+                "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
 
-An AUC in the range 0.6-0.7: Moderate discrimination ability.
+# Initialize an empty list to store results
+result <- list()
+
+labs_blood_gas_death_outcome <- labs_blood_gas_death_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform the statistical test
+  test_result <- perform_statistical_tests(labs_blood_gas_death_outcome, "SURVIVAL_FLAG", predictor, predictor)
+  
+  # Append the result to the list
+  result[[predictor]] <- test_result
+}
+
+# Combine all results into a single data frame
+final_result <- do.call(rbind, result)
+
+# Print the final results
+print(final_result)
+
+rm(final_result, predictors, labs_blood_gas_death_outcome, test_result, auc_value, param, predictor)
+```
 
 #### 7.3.1.2. Hematology
 
 
+
 #### 7.3.1.3. Blood Chemistry
 
-### 7.3.2. Outcome 1: Death Status by Laboratory Data (Blood)
+### 7.3.2. Outcome 2: Length of Survival by Laboratory Data (Blood)
 #### 7.3.2.1. Blood Gas
+
+```{r Length of Survival  by Laboratory Data (Blood) Blood Gas correlation matrix}
+# Assuming `labs_blood_gas_survival` contains numeric data and non-numeric columns to be excluded
+correlation_data <- labs_blood_gas_survival %>%
+  select(where(is.numeric)) %>%
+  select(-SURVIVAL_FLAG, -VISIT_NUM)
+
+# Compute the correlation matrix
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
+
+# Plot the correlation matrix
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         number.cex = 0.3,    # Smaller text size for numbers
+         addCoef.col = "black", 
+         mar = c(1, 1, 1, 1),
+         cl.cex = 0.8,        
+         tl.cex = 0.3)   
+
+rm(correlation_data, correlation_matrix, result)
+```
+
+No correlations with Survival Length were identified.
+
+```{r Length of Survival  by Laboratory Data (Blood) Blood Gas HR }
+
+# Define predictors to evaluate
+predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "GLUCOSE", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
+
+# Initialize an empty list to store results
+hr_results <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform Hazard Ratio (HR) assessment for the current predictor
+  hr_result <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", predictor, labs_blood_gas_survival)
+  
+  # Append the result to the list
+  hr_results[[predictor]] <- hr_result
+}
+
+# Combine all results into a single data frame
+hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
+  cbind(Predictor = predictor, hr_results[[predictor]])
+}))
+
+# Convert to data frame for better formatting
+hr_table <- as.data.frame(hr_table)
+
+# Print the final HR table
+print(hr_table)
+
+rm(predictors, hr_results, hr_table, labs_blood_gas_survival, hr_result)
+```
 
 #### 7.3.2.2. Hematology
 
 
 #### 7.3.2.3. Blood Chemistry
 
-### 7.3.3. Outcome 1: Death Status by Laboratory Data (Blood)
+### 7.3.3. Outcome 3: ICU stay Length by Laboratory Data (Blood)
 #### 7.3.3.1. Blood Gas
+
+```{r Length of ICU STAY length  by Laboratory Data (Blood) Blood Gas correlation matrix}
+# Assuming `labs_blood_gas_LOS` contains numeric data and non-numeric columns to be excluded
+correlation_data <- labs_blood_gas_LOS %>%
+  select(where(is.numeric)) %>%
+  select(-VISIT_NUM)
+
+# Compute the correlation matrix
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
+
+# Plot the correlation matrix
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         number.cex = 0.3,    # Smaller text size for numbers
+         addCoef.col = "black", 
+         mar = c(1, 1, 1, 1),
+         cl.cex = 0.8,        
+         tl.cex = 0.3)   
+
+rm(correlation_data, correlation_matrix)
+
+```
+
+No correlations with LOS was found.
+
+```{r Death Status by Laboratory Data (Blood Gas) stat tests}
+# Define predictors to evaluate
+predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "GLUCOSE", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
+  
+# Initialize an empty list to store results
+results <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform assessment for the current predictor
+  result <- analyze_predictor_LOS(labs_blood_gas_LOS, predictor, LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+  
+  # Append the result to the list
+  results[[predictor]] <- result
+}
+
+# Combine all results into a single data frame
+table <- do.call(rbind, lapply(names(results), function(predictor) {
+  cbind(Predictor = predictor, results[[predictor]])
+}))
+
+# Convert to data frame for better formatting
+table <- as.data.frame(table)
+
+# Print the final HR table
+print(table)
+
+rm(table, results, predictors, predictor, labs_blood_gas_LOS, blood_gas, labs_blood_gas_combined)
+```
 
 #### 7.3.3.2. Hematology
 
@@ -3218,20 +3486,24 @@ data <- data.frame(
     "Diagnoses", "Number of diagnoses", "Key Diagnose", "All Diagnoses", 
     "Isolations", "TELE", "RESP", "CDIFF", "MRSA", "VRE",
     "Prescriptions", "Number of prescriptions", "ATC", "Generic names",
-    "Procedures", "CHEST_X_RAY", "EXTUBATION", "INTUBATION", "ARTERIAL LINE", "INVASIVE VENTILATION", "DIALYSIS - CRRT"
+    "Procedures", "CHEST_X_RAY", "EXTUBATION", "INTUBATION", "ARTERIAL LINE", "INVASIVE VENTILATION", "DIALYSIS - CRRT",
+    "Blood Gas", "HEMOGLOBIN", "BASE_EXCESS", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "GLUCOSE", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN"
   ),
   Death_Status = c("", "+", "+", "+", "+", "+", "+", "+", "", "+", "+", "+", 
                    "", "+", "-", "+", "+", "+",
                    "", "+", "+", "+",
-                   "", "+", "+", "+", "+", "+", "+"),
+                   "", "+", "+", "+", "+", "+", "+",
+                   "", "+", "+", "+", "+", "+", "+", "+", "-", "-", "-", "-", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-"),
   Survival = c("", "+", "+", "+", "+", "+", "+", "+", "", "", "Not estimated", "Not estimated", 
                "", "+", "-", "+", "-", "+",
                "", "+", "Not estimated", "Not estimated",
-               "", "+", "+", "+", "+", "+", "-"),
+               "", "+", "+", "+", "+", "+", "-",
+               "", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-"),
   LOS = c("", "-", "+", "+", "-", "+", "+", "-", "", "", "Not estimated", "Not estimated",
           "", "-", "-", "+", "+", "+",
           "", "+", "Not estimated", "Not estimated",
-          "", "+", "+", "+", "+", "+", "-")
+          "", "+", "+", "+", "+", "+", "-",
+          "", "H+", "+", "-", "-", "-", "+", "+", "-", "-", "+", "+", "-", "+", "+", "-", "+", "-", "+", "+", "-", "-")
 )
 
 # Replace empty cells with NA for proper vertical merging
