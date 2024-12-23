@@ -4,12 +4,17 @@ author: "Elena Marochkina"
 date: "`r Sys.Date()`"
 output: 
   html_document:
+    df_print: paged
     toc: yes
     toc_depth: 4
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(warning = FALSE, echo = FALSE)
+knitr::opts_chunk$set(
+  warning = FALSE,
+  echo = FALSE,
+  message = FALSE
+)
 
 ```
 
@@ -32,6 +37,9 @@ library(lmerTest)
 library(glmnet)
 library(pROC)
 library(corrplot)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
 
 
 # Custom theme for visualisations
@@ -340,6 +348,20 @@ analyze_predictor_LOS <- function(data, predictor, LOS, patient_id) {
 
 ```
 
+```{r styled tables}
+# Define the function for styled tables
+print_table <- function(table, format = "html", striped = TRUE, hover = TRUE, full_width = FALSE) {
+  
+  kable(table, format = format, table.attr = "class='table table-bordered'") %>%
+    kable_styling(
+      bootstrap_options = c(
+        if (striped) "striped" else NULL,
+        if (hover) "hover" else NULL
+      ),
+      full_width = full_width
+    )
+}
+```
 
 # 1. Outcomes Data
 
@@ -835,7 +857,7 @@ result_sex <- perform_statistical_tests(patients_death_status, "SURVIVAL_FLAG", 
 # Merge the results
 merged_results <- bind_rows(result_age, result_sex)
 
-print(merged_results)
+print_table(merged_results)
 
 rm(patients_death_status, result_age, result_sex, merged_results)
 ```
@@ -896,7 +918,7 @@ ggsurvplot(
 
 hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("GENDER", "AGE_AT_ADMISSION"), patients_survival_outcome)
 
-print(hr_table)
+print_table(hr_table)
 
 rm(hr_table, fit_age_group, fit_gender, patients_survival_outcome)
 ```
@@ -914,7 +936,7 @@ result_sex <- analyze_predictor_LOS(patients_los_outcome, predictor = "GENDER", 
 
 # Merge the results
 merged_results <- bind_rows(result_age, result_sex)
-print(merged_results)
+print_table(merged_results)
 
 rm(patients, merged_results, result_age, result_sex, patients_los_outcome)
 ```
@@ -1127,7 +1149,7 @@ result_ETHNICITY <- perform_statistical_tests(admissions_death_outcome, "SURVIVA
 # Merge the results
 merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
 
-print(merged_results)
+print_table(merged_results)
 
 rm(result_ADMISSION_TYPE, result_ETHNICITY, result_INSURANCE, result_MARITAL_STATUS, result_RELIGION, merged_results, admissions_death_outcome)
 
@@ -1229,7 +1251,7 @@ ggsurvplot(
 
 hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("ADMISSION_TYPE", "INSURANCE", "MARITAL_STATUS", "RELIGION", "ETHNICITY"), admissions_survival_outcome)
 
-print(hr_table)
+print_table(hr_table)
 
 rm(admissions_survival_outcome, hr_table, fit_religion, fit_admission_type, fit_ethnicity, fit_insurance, fit_marital_status)
 
@@ -1254,7 +1276,7 @@ result_ETHNICITY <- analyze_predictor_LOS(admissions_los_outcome, predictor = "E
 # Merge the results
 merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELIGION, result_MARITAL_STATUS, result_ETHNICITY)
 
-print(merged_results)
+print_table(merged_results)
 
 rm(admissions, admissions_los_outcome, merged_results, result_RELIGION, result_MARITAL_STATUS, result_ADMISSION_TYPE, result_INSURANCE, result_ETHNICITY)
 ```
@@ -1322,8 +1344,47 @@ diagnoses %>%
 
 ```
 
-## 4.3. Visualisation Analysis by Outcome
+```{r Transform data diagnoses}
+unique_diagnosis <- diagnoses %>%
+  filter(SEQ_NUM == 1) %>%
+  count(ICD9_CODE) %>%
+  filter(n > 500) %>%
+  pull(ICD9_CODE)
+  
+# Filter and select relevant columns
+diagnoses_transformed <- diagnoses %>%
+  filter(ICD9_CODE %in% unique_diagnosis) %>%
+  select(-ROW_ID, -SUBJECT_ID, -HADM_ID, -SEQ_NUM, -SHORT_TITLE, -LONG_TITLE)  %>%
+  distinct() %>%
+  mutate(PRESENT = 1) %>%  # Add flag for presence
+# Pivot longer and one-hot encode ICD9_CODE
+  mutate(PRESENT = 1) %>%  # Add flag for presence
+  pivot_wider(
+    names_from = ICD9_CODE,
+    values_from = PRESENT,
+    values_fill = list(PRESENT = NA)
+  ) %>%
+  select(-DIAGNOSES_NUM) %>%
+  rename_with(~ paste0("ICD9_", .), -SUBJECT_ID_COMPOSE)
 
+diagnoses_transformed <- diagnoses_transformed %>%
+  group_by(SUBJECT_ID_COMPOSE) %>%
+  summarise(
+    across(
+      everything(), 
+      ~ if (all(is.na(.))) NA else na.omit(.)[1], # Keep the first non-NA value
+      .names = "{.col}"
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    across(everything(), ~ replace_na(., 0)),
+        across(where(is.numeric), as.factor)
+  ) 
+
+```
+
+## 4.3. Visualisation Analysis by Outcome
 ### 4.3.1. Outcome 1: Death Status by Diagnoses
 
 ``` {r Death Status by Diagnoses}
@@ -1382,6 +1443,36 @@ Other critical conditions such as "Unspecified septicemia" (2064 instances) and 
 
 Patients who died had a higher mean number of diagnoses (18.4) compared to those who survived (16.7).
 This indicates a potential association between the complexity of a patient's medical history (measured by the number of diagnoses) and mortality.
+
+```{r Visualise ICD9 codes over Death Status}
+diagnoses_transformed_death_outcome <- Death_status_outcome %>%
+  left_join(diagnoses_transformed, by = c("SUBJECT_ID_COMPOSE")) %>%
+  select(-SUBJECT_ID)
+
+# Pivot the data to long format and filter for presence (1)
+icd9_summary <- diagnoses_transformed_death_outcome %>%
+  pivot_longer(
+    cols = -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG),  # Pivot ICD9 code columns
+    names_to = "ICD9_CODE",
+    values_to = "Presence"
+  ) %>%
+  filter(Presence == 1) %>%  # Keep only rows where ICD9 code is present
+  group_by(ICD9_CODE, SURVIVAL_FLAG) %>%  # Group by ICD9 code and survival flag
+  summarise(Count = n_distinct(SUBJECT_ID_COMPOSE), .groups = "drop") %>% # Count unique subjects
+  arrange(desc(Count))  
+  
+  ggplot(icd9_summary, aes(x = ICD9_CODE, y = Count, fill = as.factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", position = "dodge2", color = "black") +
+  scale_fill_manual(values = c("0" = color_palette[12], "1" = color_palette[1]), name = "Survival Status") +
+  theme_custom +
+  labs(
+    title = "Number of Subjects per ICD9 Code by Survival Status",
+    x = "ICD9 Code",
+    y = "Number of Subjects"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
 
 ### 4.3.2. Outcome 2: Length of Survival by Diagnoses
 
@@ -1457,6 +1548,41 @@ There is an observable upward trend, indicating that a higher survival length co
 This suggests a potential relationship where prolonged hospital stays or complex medical conditions (resulting in multiple diagnoses) are associated with extended survival durations.
 These insights highlight the importance of including high-priority diagnoses and the number of diagnoses in survival modeling, as they seem to provide significant explanatory value for survival outcomes.
 
+```{r Visualise ICD9 codes over Survival}
+diagnoses_transformed_survival <- Survival_outcome %>%
+  left_join(diagnoses_transformed, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID)
+
+# Pivot the data to long format for plotting
+data_long <- diagnoses_transformed_survival %>%
+  pivot_longer(
+    cols = -c(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG), # Replace `SURVIVAL_LENGTH` with your column
+    names_to = "ICD9_CODE",
+    values_to = "Presence"
+  ) %>%
+  filter(Presence == 1)  # Keep only rows where ICD9 code is present
+
+# Plot boxplot
+# Plot boxplot with faceting by survival flag
+ggplot(data_long, aes(x = ICD9_CODE, y = SURVIVAL, fill = as.factor(SURVIVAL_FLAG))) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  coord_flip() +
+  scale_fill_manual(values = c("0" = color_palette[6], "1" = color_palette[10]), labels = c("Survived", "Died")) +
+  theme_minimal() +
+  labs(
+    title = "Survival Length by ICD9 Code and Survival Status",
+    x = "ICD9 Codes",
+    y = "Survival Length (Days)",
+    fill = "Survival Status"
+  ) +
+  facet_wrap(~ SURVIVAL_FLAG, labeller = as_labeller(c(`0` = "Died", `1` = "Survived"))) +
+  theme(
+    axis.text.y = element_text(size = 7),
+    strip.text = element_text(size = 10)  # Adjust facet titles
+  )
+
+```
+
 ### 4.4.3. Outcome 3: Length of ICU Stay by Diagnoses
 
 ```{r Length of ICU Stay by Diagnoses Exploratory Analysis}
@@ -1523,6 +1649,33 @@ Trend Observation: There is an increasing trend in the average number of diagnos
 
 Conclusion: The average number of diagnoses can be a key factor when modeling ICU stays, as it reflects the complexity of the patient’s medical condition.
 
+```{r Length of ICU Stay by Diagnose}
+diagnoses_transformed_LOS <- LOS_outcome %>%
+  left_join(diagnoses_transformed, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID, -ICUSTAY_ID)
+
+# Pivot the data to long format for plotting
+data_long <- diagnoses_transformed_LOS %>%
+  pivot_longer(
+    cols = -c(SUBJECT_ID_COMPOSE, LOS), # Replace `SURVIVAL_LENGTH` with your column
+    names_to = "ICD9_CODE",
+    values_to = "Presence"
+  ) %>%
+  filter(Presence == 1)  # Keep only rows where ICD9 code is present
+
+# Plot boxplot
+ggplot(data_long, aes(x = ICD9_CODE, y = LOS)) +
+  geom_boxplot(outlier.shape = NA, fill = color_palette[4], alpha = 0.7) +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "Survival Length by ICD9 Code",
+    x = "ICD9 Codes",
+    y = "Survival Length (Days)"
+  ) +
+  theme(axis.text.y = element_text(size = 7))
+```
+
 ## 4.4. Exploratory analysis
 ### 4.4.1. Outcome 1: Death Status by Diagnoses
 
@@ -1531,25 +1684,36 @@ diagnoses_death_outcome$LONG_TITLE <- droplevels(diagnoses_death_outcome$LONG_TI
 
 result_diagnoses_num <- perform_statistical_tests(diagnoses_death_outcome, "SURVIVAL_FLAG", "DIAGNOSES_NUM", "Diagnoses number")
 
-result_all_diagnosis <- perform_statistical_tests(diagnoses_death_outcome, "SURVIVAL_FLAG", "LONG_TITLE", "Diagnosis")
+# Select the ICD9 code columns
+predictors <- names(diagnoses_transformed_death_outcome)[!names(diagnoses_transformed_death_outcome) %in% c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")]
 
-high_priority <- diagnoses_death_outcome %>%
-  filter(SEQ_NUM == 1)
+# Initialize an empty list to store results
+result <- list()
 
-result_high_priority <- perform_statistical_tests(high_priority, "SURVIVAL_FLAG", "LONG_TITLE", "Key Diagnosis")
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform the statistical test
+  test_result <- perform_statistical_tests(diagnoses_transformed_death_outcome, "SURVIVAL_FLAG", predictor, predictor)
+  
+  # Append the result to the list
+  result[[predictor]] <- test_result
+}
 
-merged_results <- bind_rows(result_diagnoses_num, result_all_diagnosis, result_high_priority)
 
-print(merged_results)
+# Combine all results into a single data frame
+merged_results <- bind_rows(result)
 
-rm(result_diagnoses_num, result_all_diagnosis, high_priority, result_high_priority)
+print_table(result_diagnoses_num)
+print_table(merged_results)
+
+rm(result_diagnoses_num, results_list, merged_results)
 ```
 
 All three factors are significant predictors and should be integrated into the modeling framework. Their inclusion will enhance the accuracy and reliability of predictions related to death outcome.
 
 ### 4.4.2. Outcome 2: Length of Survival by Diagnoses
 
-```{r Length of Survival by Diagnoses Exploratory analysis}
+```{r Length of Survival by Diagnoses number Exploratory analysis}
 diagnoses_survival_outcome <- Survival_outcome %>%
   left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>%
   select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, DIAGNOSES_NUM, LONG_TITLE, SEQ_NUM) %>%
@@ -1586,9 +1750,47 @@ ggsurvplot(
 
 hr_table_number_diagnoses <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "DIAGNOSES_NUM", diagnoses_survival_numbers)
 
-print(hr_table_number_diagnoses)
+print_table(hr_table_number_diagnoses)
 
 rm(diagnoses_survival_outcome, diagnoses_survival_numbers, fit_diagnoses_num, hr_table_number_diagnoses)
+
+```
+
+```{r Length of Survival by Diagnoses Exploratory analysis}
+
+# Define predictors to evaluate
+predictors <- c("ICD9_486", "ICD9_41071", "ICD9_41401", "ICD9_4240", "ICD9_4280", "ICD9_5849", "ICD9_0389", "ICD9_4241", "ICD9_430", "ICD9_431", "ICD9_51881", "ICD9_5070")
+
+# Initialize an empty list to store results
+result <- list()
+
+diagnoses_transformed_survival  <- diagnoses_transformed_survival  %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+  )
+
+# Loop through each predictor
+for (predictor in predictors) {
+  
+  # Perform the hazard ratio assessment
+  test_result <- HR_assessment(
+    survival_time = "SURVIVAL",
+    event_status = "SURVIVAL_FLAG",
+    predictors = predictor,  # Single predictor
+    data = diagnoses_transformed_survival
+  )
+  
+  # Append the result to the list
+  result[[predictor]] <- test_result
+}
+
+# Combine all results into a single data frame
+final_result <- do.call(rbind, result)
+
+# Print the final results
+print_table(final_result)
+
+rm(final_result, predictors, test_result, param, predictor)
 
 ```
 
@@ -1610,12 +1812,44 @@ diagnoses_LOS_numbers <- diagnoses_los_outcome %>%
 
 result_diagnoses_num <- analyze_predictor_LOS(diagnoses_LOS_numbers, predictor = "DIAGNOSES_NUM", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
 
-print(result_diagnoses_num)
+print_table(result_diagnoses_num)
 
 rm(result_diagnoses_num, diagnosis_LOS_numbers, diagnoses_los_outcome)
 ```
 
 Higher numbers of diagnoses (6-10 and >10) are predictive of longer ICU stays, as indicated by statistically significant results.
+
+```{r Length of LOS by Diagnoses Exploratory analysis}
+
+# Define predictors to evaluate
+predictors <- c("ICD9_486", "ICD9_41071", "ICD9_41401", "ICD9_4240", "ICD9_4280", "ICD9_5849", "ICD9_0389", "ICD9_4241", "ICD9_430", "ICD9_431", "ICD9_51881", "ICD9_5070")
+
+# Initialize an empty list to store results
+results <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform assessment for the current predictor
+  result <- analyze_predictor_LOS(data = diagnoses_transformed_LOS, predictor = predictor, LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+  
+  # Append the result to the list
+  results[[predictor]] <- result
+}
+
+# Combine all results into a single data frame
+table <- do.call(rbind, lapply(names(results), function(predictor) {
+  cbind(Predictor = predictor, results[[predictor]])
+}))
+
+# Convert to data frame for better formatting
+table <- as.data.frame(table)
+
+# Print the final HR table
+print_table(table)
+
+rm(table, results, predictors, predictor)
+
+```
 
 # 5. Isolations Data
 ## 5.1. Read data
@@ -1624,9 +1858,8 @@ Higher numbers of diagnoses (6-10 and >10) are predictive of longer ICU stays, a
 isolations <- read.csv("../data/raw/cleaned/CALLOUT_clean.csv", stringsAsFactors = TRUE) %>%
   mutate(across(where(is.character), as.factor))  %>%
   filter(SUBJECT_ID %in% subject_ids_adults) %>%
+  select(-REQUEST_TELE, -REQUEST_RESP) %>%
   mutate(SUBJECT_ID = as.factor(SUBJECT_ID),
-         REQUEST_TELE = as.factor(REQUEST_TELE),
-         REQUEST_RESP = as.factor(REQUEST_RESP),
          REQUEST_CDIFF = as.factor(REQUEST_CDIFF),
          REQUEST_MRSA = as.factor(REQUEST_MRSA),
          REQUEST_VRE = as.factor(REQUEST_VRE))
@@ -1634,6 +1867,7 @@ isolations <- read.csv("../data/raw/cleaned/CALLOUT_clean.csv", stringsAsFactors
 skimr::skim(isolations %>%
               select(-SUBJECT_ID, -HADM_ID, -ROW_ID))
 ```
+
 
 ## 5.2.   Descriptive Statistics
 ### 5.2.1. Descriptive statistics for categorical variables (Isolations Data)
@@ -1665,12 +1899,12 @@ isolations %>%
 ```{r Death Status by Isolations Data}
 isolations_death_outcome <- Death_status_outcome %>%
   left_join(isolations, by = "SUBJECT_ID_COMPOSE") %>%
-  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF) %>%
-  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_TELE) & !is.na(REQUEST_RESP) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, REQUEST_VRE, REQUEST_MRSA, REQUEST_CDIFF) %>%
+  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
 
 # Reshape the data to long format
 data_long <- isolations_death_outcome %>%
-  pivot_longer(cols = c(REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF), 
+  pivot_longer(cols = c(REQUEST_VRE, REQUEST_MRSA, REQUEST_CDIFF), 
                names_to = "Request_Type", 
                values_to = "Flag") %>%
   filter(!is.na(Flag))  # Remove rows where Flag is NA
@@ -1705,12 +1939,12 @@ rm(count_data, data_long)
 
 isolations_survival_outcome <- Survival_outcome %>%
   left_join(isolations, by = "SUBJECT_ID_COMPOSE") %>%
-  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL, REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF) %>%
-  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_TELE) & !is.na(REQUEST_RESP) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL, REQUEST_VRE, REQUEST_MRSA, REQUEST_CDIFF) %>%
+  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
 
 # Reshape the data to long format for better visualization
 isolations_long <- isolations_survival_outcome %>%
-  pivot_longer(cols = c(REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF), 
+  pivot_longer(cols = c(REQUEST_VRE, REQUEST_MRSA, REQUEST_CDIFF), 
                names_to = "Isolation_Type", 
                values_to = "Isolation_Flag") %>%
   filter(!is.na(Isolation_Flag))  # Remove rows with missing values for Isolation_Flag
@@ -1734,13 +1968,13 @@ rm(isolations_long)
 ``` {r Length of ICU Stay by Isolations Data}
 isolations_los_outcome <- LOS_outcome %>%
   left_join(isolations, by = "SUBJECT_ID_COMPOSE") %>%
-  select(SUBJECT_ID_COMPOSE, LOS, REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF) %>%
-  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_TELE) & !is.na(REQUEST_RESP) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
+  select(SUBJECT_ID_COMPOSE, LOS, REQUEST_VRE, REQUEST_MRSA, REQUEST_CDIFF) %>%
+  filter(!is.na(REQUEST_VRE) & !is.na(REQUEST_MRSA) & !is.na(REQUEST_CDIFF))
 
 
 # Reshape the data to long format for better visualization
 isolations_long <- isolations_los_outcome %>%
-  pivot_longer(cols = c(REQUEST_VRE, REQUEST_TELE, REQUEST_RESP, REQUEST_MRSA, REQUEST_CDIFF), 
+  pivot_longer(cols = c(REQUEST_VRE, REQUEST_MRSA, REQUEST_CDIFF), 
                names_to = "Isolation_Type", 
                values_to = "Isolation_Flag") %>%
   filter(!is.na(Isolation_Flag))  # Remove rows with missing values for Isolation_Flag
@@ -1763,58 +1997,24 @@ rm(isolations_long)
 
 ```{r Death Status by Isolations Data Exploratory Analysis}
 
-result_TELE <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_TELE", "TELE")
-result_RESP <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_RESP", "RESP")
 result_CDIFF <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_CDIFF", "CDIFF")
 result_MRSA <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_MRSA", "MRSA")
 result_VRE <- perform_statistical_tests(isolations_death_outcome, "SURVIVAL_FLAG", "REQUEST_VRE", "VRE")
 
 # Merge the results
-merged_results <- bind_rows(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE)
+merged_results <- bind_rows(result_CDIFF, result_MRSA, result_VRE)
 
-print(merged_results)
+print_table(merged_results)
 
 rm(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE, merged_results, isolations_death_outcome)
 
 ```
 
-TELE, CDIFF, MRSA, and VRE will be considered as key predictors in death outcome models.
+CDIFF, MRSA, and VRE will be considered as key predictors in death outcome models.
 
 ### 5.4.2. Outcome 2: Length of Survival by Admissions Data
 
 ```{r Length of Survival by Isolations Data exploratory analysis}
-
-# Generate Kaplan-Meier survival curve by GENDER
-fit_TELE <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_TELE, data = isolations_survival_outcome)
-
-# Plot the Kaplan-Meier curve
-ggsurvplot(
-  fit_TELE,
-  data = isolations_survival_outcome,
-  pval = TRUE,  # Display p-value for gender
-  conf.int = TRUE,  # Add confidence intervals
-  ggtheme = theme_custom,
-  surv.median.line = "hv",
-  legend.title = "Admission type",
-  title = "Survival Curve by Admission Type",
-  palette =  color_palette
-)
-
-# Generate Kaplan-Meier survival curve by GENDER
-fit_RESP <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_RESP, data = isolations_survival_outcome)
-
-# Plot the Kaplan-Meier curve 
-ggsurvplot(
-  fit_RESP,
-  data = isolations_survival_outcome,
-  pval = TRUE,  # Display p-value for age groups
-  conf.int = TRUE,  # Add confidence intervals
-  ggtheme = theme_custom,
-  surv.median.line = "hv",
-  legend.title = "Insurance",
-  title = "Survival Curve by Insurance",
-  palette = color_palette
-)
 
 # Fit Kaplan-Meier model
 fit_CDIFF <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ REQUEST_CDIFF, data = isolations_survival_outcome)
@@ -1864,38 +2064,32 @@ ggsurvplot(
   palette = color_palette
 )
 
-hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("REQUEST_TELE", "REQUEST_RESP", "REQUEST_CDIFF", "REQUEST_MRSA", "REQUEST_VRE"), isolations_survival_outcome)
+hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("REQUEST_CDIFF", "REQUEST_MRSA", "REQUEST_VRE"), isolations_survival_outcome)
 
-print(hr_table)
+print_table(hr_table)
 
-rm(isolations_survival_outcome, hr_table, fit_TELE, fit_CDIFF, fit_RESP, fit_MRSA, fit_VRE)
+rm(isolations_survival_outcome, hr_table, fit_CDIFF, fit_MRSA, fit_VRE)
 
 ```
 
 Increased Risk: Significant risks are observed for Clostridium Difficile (CDIFF) and Vancomycin-Resistant Enterococci (VRE), which both increase the risk of death.
 
-Decreased Risk: Telemedicine (TELE) is associated with a significant reduction in the risk of death.
-
-No Significant Effect: Respiratory infections (RESP) and MRSA do not show statistically significant effects on survival.
-
-In summary, REQUEST_TELE, REQUEST_CDIFF, and REQUEST_VRE are strong candidates for inclusion in future models, while REQUEST_RESP and REQUEST_MRSA can be excluded or investigated further for possible significance with a larger dataset.
+In summary, REQUEST_CDIFF, and REQUEST_VRE are strong candidates for inclusion in future models, while REQUEST_MRSA can be excluded or investigated further for possible significance with a larger dataset.
 
 ### 5.4.3. Outcome 3: Length of ICU Stay by Isolations Data
 
 ``` {r Length of ICU Stay by isolations Data exploratary analysis}
   
-result_TELE <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_TELE", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
-result_RESP <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_RESP", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
 result_CDIFF <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_CDIFF", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
 result_MRSA <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_MRSA", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
 result_VRE <- analyze_predictor_LOS(isolations_los_outcome, predictor = "REQUEST_VRE", LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
 
 # Merge the results
-merged_results <- bind_rows(result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE)
+merged_results <- bind_rows(result_CDIFF, result_MRSA, result_VRE)
 
-print(merged_results)
+print_table(merged_results)
 
-rm(isolations, isolations_los_outcome, merged_results, result_TELE, result_RESP, result_CDIFF, result_MRSA, result_VRE)
+rm(isolations, isolations_los_outcome, merged_results, result_CDIFF, result_MRSA, result_VRE)
 ```
 
 REQUEST_CDIFF, REQUEST_MRSA, and REQUEST_VRE as strong predictors of LOS.
@@ -1921,7 +2115,7 @@ skimr::skim(prescriptions %>%
 
 ### 6.2.1. Descriptive statistics for categorical variables Prescriptions data)
 
-```{r descriptive statistica prescriptions}
+```{r descriptive statistics prescriptions}
 # Clean and summarize the categorical data for all factor variables
 prescriptions %>%
   select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -ICUSTAY_ID, -ATC_ID) %>%
@@ -1943,6 +2137,110 @@ prescriptions %>%
   border_inner(border = fp_border(color = "black", width = 1)) %>%
   border_outer(border = fp_border(color = "black", width = 1))
 ```
+
+```{r prescriptions data transformation}
+unique_prescriptions <- prescriptions %>%
+  filter(DRUG_TYPE == "MAIN") %>%
+  count(ATC_ID) %>%
+  filter(n > 1000) %>%
+  filter(ATC_ID %in% c("J01CA", "J01DD", "J01DH", "J01GB", "J02AC",
+    "B01AA", "B01AB", "B01AC",
+    "C01AA", "C01CA", "C09AA", "C09CA",
+    "N02AA", "N05CD", "N01AH",
+    "L04AD", "L01EG",
+    "R03AC", "R03DC",
+    "H02AA", "H01AA",
+    "B05BB", "B05XA",
+    "A02BA", "A02BC",
+    "D01AC")) %>%
+  pull(ATC_ID) 
+
+# Filter and select relevant columns
+prescriptions_transformed <- prescriptions %>%
+  filter(ATC_ID %in% unique_prescriptions) %>%
+  filter(DRUG_TYPE == "MAIN") %>%
+  select(-SUBJECT_ID, -HADM_ID, -ICUSTAY_ID, -ATC_NAME, -DRUG_NAME_GENERIC, -DRUG_TYPE, -ROUTE, -STARTDATE, -ENDDATE)  %>%
+  distinct() %>%
+  mutate(PRESENT = 1) %>%  # Add flag for presence
+# Pivot longer and one-hot encode ICD9_CODE
+  mutate(PRESENT = 1) %>%  # Add flag for presence
+  pivot_wider(
+    names_from = ATC_ID,
+    values_from = PRESENT,
+    values_fill = list(PRESENT = NA)
+  ) %>%
+  rename_with(~ paste0(.), -SUBJECT_ID_COMPOSE)
+
+prescriptions_transformed <- prescriptions_transformed %>%
+  group_by(SUBJECT_ID_COMPOSE) %>%
+  summarise(
+    across(
+      everything(), 
+      ~ if (all(is.na(.))) NA else na.omit(.)[1], # Keep the first non-NA value
+      .names = "{.col}"
+    )
+  ) %>%
+  ungroup() %>%
+  mutate(
+    across(everything(), ~ replace_na(., 0)),
+        across(where(is.numeric), as.factor)
+  ) 
+
+```
+
+Chosen ATC Codes for ICU Survival Model:
+Antibiotics and Antimicrobials: Critical in treating infections in ICU patients.
+
+- J01CA: Penicillins with extended spectrum.
+- J01DD: Third-generation cephalosporins.
+- J01DH: Carbapenems.
+- J01GB: Aminoglycosides.
+- J02AC: Triazole antifungals (for fungal infections).
+
+Anticoagulants and Coagulants: Common for preventing or managing thrombosis.
+
+- B01AA: Vitamin K antagonists.
+- B01AB: Heparins.
+- B01AC: Platelet aggregation inhibitors.
+
+Cardiovascular Agents: For heart function stabilization in critically ill patients.
+
+- C01AA: Cardiac glycosides.
+- C01CA: Adrenergic and dopaminergic agents.
+- C09AA: ACE inhibitors.
+- C09CA: Angiotensin II antagonists.
+
+Sedatives and Analgesics: For pain management and sedation in ICU settings.
+
+- N02AA: Opioid analgesics.
+- N05CD: Benzodiazepine derivatives (sedation).
+- N01AH: General anesthetics.
+
+Immunosuppressants: Critical in managing sepsis or post-transplant patients.
+
+- L04AD: Tumor necrosis factor-alpha inhibitors.
+- L01EG: Protein kinase inhibitors (e.g., for cancer patients).
+
+Respiratory Agents: Essential for patients requiring ventilation support.
+- R03AC: Selective beta-2-adrenoreceptor agonists.
+- R03DC: Leukotriene receptor antagonists.
+
+Steroids and Hormonal Agents: For inflammation control and adrenal insufficiency.
+- H02AA: Corticosteroids for systemic use.
+- H01AA: Pituitary and hypothalamic hormones.
+
+Electrolytes and Infusions: To stabilize critically ill patients.
+- B05BB: Solutions affecting electrolyte balance.
+- B05XA: Blood substitutes and perfusion solutions.
+
+Gastrointestinal Agents: For managing ICU-related stress ulcers and reflux.
+
+- A02BA: H2 receptor antagonists.
+- A02BC: Proton pump inhibitors.
+
+Antiseptics and Antifungals: Used to prevent and treat secondary infections.
+
+- D01AC: Antifungals for systemic use.
 
 ## 6.3. Visualisation Analysis by Outcome
 ### 6.3.1. Outcome 1: Death Status by Prescripions Data
@@ -2084,6 +2382,51 @@ rm(top_common_drugs, top_atc_names)
 
 ```
 
+```{r Visualise ATC codes over Death Status}
+prescriptions_transformed_death_outcome <- Death_status_outcome %>%
+  left_join(prescriptions_transformed, by = c("SUBJECT_ID_COMPOSE")) %>%
+  select(-SUBJECT_ID)
+
+# Pivot the data to long format and filter for presence (1)
+atc_summary <- prescriptions_transformed_death_outcome %>%
+  pivot_longer(
+    cols = -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG),  # Pivot ICD9 code columns
+    names_to = "ATC",
+    values_to = "Presence"
+  ) %>%
+  filter(Presence == 1) %>%  # Keep only rows where ICD9 code is present
+  group_by(ATC, SURVIVAL_FLAG) %>%  # Group by ICD9 code and survival flag
+  summarise(Count = n_distinct(SUBJECT_ID_COMPOSE), .groups = "drop") %>% # Count unique subjects
+  arrange(desc(Count))  
+  
+# Plot for Survival Flag = 0 (Died)
+ggplot(atc_summary %>% filter(SURVIVAL_FLAG == 0), aes(x = ATC, y = Count, fill = as.factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", position = "dodge2", color = "black") +
+  scale_fill_manual(values = c("0" = color_palette[12]), name = "Survival Status") +
+  theme_custom +
+  labs(
+    title = "Number of Subjects per ICD9 Code - Died",
+    x = "ATC Code",
+    y = "Number of Subjects"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size= 3 )) +
+  guides(fill = "none")  # Remove redundant legend for single-status plot
+
+# Plot for Survival Flag = 1 (Survived)
+ggplot(atc_summary %>% filter(SURVIVAL_FLAG == 1), aes(x = ATC, y = Count, fill = as.factor(SURVIVAL_FLAG))) +
+  geom_bar(stat = "identity", position = "dodge2", color = "black") +
+  scale_fill_manual(values = c("1" = color_palette[1]), name = "Survival Status") +
+  theme_custom +
+  labs(
+    title = "Number of Subjects per ICD9 Code - Survived",
+    x = "ATC Code",
+    y = "Number of Subjects"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size= 3 )) +
+  guides(fill = "none")  # Remove redundant legend for single-status plot
+
+```
+
 ### 6.3.2. Outcome 2: Length of Survival by Prescriptions Data
 
 ```{r Length of Survival by Prescriptions Data}
@@ -2154,9 +2497,64 @@ prescriptions_survival_outcome %>%
   theme_custom +
   theme(
     legend.position = "none",
-    axis.text.x = element_text(angle = 45, hjust = 1),  # Rotate x-axis labels
     plot.title = element_text(hjust = 0.5, face = "bold")
   )
+```
+
+```{r Visualise ATC codes over Survival}
+prescriptions_transformed_survival <- Survival_outcome %>%
+  left_join(prescriptions_transformed, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID)
+
+# Get the list of ATC columns (exclude non-ATC columns)
+atc_columns <- names(prescriptions_transformed_survival) %>%
+  setdiff(c("SUBJECT_ID_COMPOSE", "SURVIVAL", "SURVIVAL_FLAG"))
+
+# Initialize a list to store plots
+atc_plots <- list()
+
+# Loop through each ATC column and generate a plot
+for (atc in atc_columns) {
+  # Dynamically filter and prepare data for the current ATC column
+  plot_data <- prescriptions_transformed_survival %>%
+    select(SURVIVAL_FLAG, SURVIVAL, all_of(atc)) %>%
+    rename(ATC_PRESENCE = !!atc) %>%
+    mutate(ATC_PRESENCE = as.factor(ATC_PRESENCE)) %>%  # Ensure it's a factor
+    filter(!is.na(ATC_PRESENCE))  # Remove rows with NA in the ATC column
+  
+  # Generate the plot for the current ATC column
+  atc_plots[[atc]] <- ggplot(plot_data, aes(x = ATC_PRESENCE, y = SURVIVAL, fill = as.factor(SURVIVAL_FLAG))) +
+    geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+    scale_fill_manual(values = c("0" = color_palette[6], "1" = color_palette[10]), labels = c("Survived", "Died")) +
+    theme_minimal() +
+    labs(
+      title = paste("Survival Length by", atc),
+      x = paste(atc, "Presence"),
+      y = "Survival Length (Days)",
+      fill = "Survival Status"
+    ) +
+    theme(
+      axis.text.x = element_text(size = 10),
+      title = element_text(size =10),
+      legend.position = "right"
+    )
+}
+
+# Define the number of plots per page
+plots_per_page <- 4
+
+# Split plots into chunks of 4
+plot_chunks <- split(atc_plots, ceiling(seq_along(atc_plots) / plots_per_page))
+
+# Iterate over each chunk and display them
+for (chunk in plot_chunks) {
+  grid.arrange(
+    grobs = chunk,
+    ncol = 2,  # Number of columns in the grid
+    nrow = 2   # Number of rows in the grid
+  )
+}
+
 ```
 
 ### 6.3.3. Outcome 3: Length of ICU Stay by Prescriptions Data
@@ -2263,6 +2661,33 @@ prescriptions_los_outcome %>%
   )
 ```
 
+```{r Visualise ATC code over Survival}
+prescriptions_transformed_los <- LOS_outcome %>%
+  left_join(prescriptions_transformed, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID)
+
+# Pivot the data to long format for plotting
+data_long <- prescriptions_transformed_los %>%
+  pivot_longer(
+    cols = -c(SUBJECT_ID_COMPOSE, LOS), # Replace `SURVIVAL_LENGTH` with your column
+    names_to = "ATC",
+    values_to = "Presence"
+  ) %>%
+  filter(Presence == 1)  # Keep only rows where ICD9 code is present
+
+# Plot boxplot
+ggplot(data_long, aes(x = ATC, y = LOS)) +
+  geom_boxplot(outlier.shape = NA, fill = color_palette[4], alpha = 0.7) +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    title = "LOS by ATC Code",
+    x = "ATC Codes",
+    y = "LOS (Days)"
+  ) +
+  theme(axis.text.y = element_text(size = 7))
+```
+
 ## 6.4. Exploratory analysis
 ### 6.4.1. Outcome 1: Death Status by Prescriptions Data
 
@@ -2275,14 +2700,27 @@ prescriptions_number <- prescriptions_death_outcome %>%
   )
 
 result_prescriptions_number <- perform_statistical_tests(prescriptions_number, "SURVIVAL_FLAG", "PRESCRIPTIONS_NUM", "Prescription number")
-result_drug_type <- perform_statistical_tests(prescriptions_death_outcome, "SURVIVAL_FLAG", "DRUG_TYPE", "Drug type")
-result_ATC <- perform_statistical_tests(prescriptions_death_outcome, "SURVIVAL_FLAG", "ATC_NAME", "ATC name")
-result_generic_name <- perform_statistical_tests(prescriptions_death_outcome, "SURVIVAL_FLAG", "DRUG_NAME_GENERIC", "Generic name")
 
-# Merge the results
-merged_results <- bind_rows(result_prescriptions_number, result_ATC, result_drug_type, result_generic_name)
+predictors <- names(prescriptions_transformed_death_outcome)[!names(prescriptions_transformed_death_outcome) %in% c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")]
 
-print(merged_results)
+# Initialize an empty list to store results
+result <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform the statistical test
+  test_result <- perform_statistical_tests(prescriptions_transformed_death_outcome, "SURVIVAL_FLAG", predictor, predictor)
+  
+  # Append the result to the list
+  result[[predictor]] <- test_result
+}
+
+
+# Combine all results into a single data frame
+merged_results <- bind_rows(result)
+
+print_table(merged_results)
+print_table(result_prescriptions_number)
 
 rm(prescriptions_number, result_prescriptions_number, result_ATC, result_generic_name)
 ```
@@ -2331,7 +2769,7 @@ ggsurvplot(
 # Perform Hazard Ratio (HR) assessment
 hr_table_number_drugs <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "prescriptions_NUM", prescriptions_survival_numbers)
 
-print(hr_table_number_drugs)
+print_table(hr_table_number_drugs)
 
 # Remove intermediate objects to clean up
 rm(prescriptions_survival_outcome, prescriptions_survival_numbers, fit_prescriptions_num, hr_table_number_drugs)
@@ -2341,6 +2779,47 @@ rm(prescriptions_survival_outcome, prescriptions_survival_numbers, fit_prescript
 PRESCRIPTIONS_NUM should be included as a predictor in future modeling.
 
 Significant Risk: All intervals show highly significant hazard ratios (HR) with p < 0.0001, indicating it is strongly associated with survival outcomes.
+
+```{r Length of Survival by Pescriptionss Exploratory analysis}
+
+# Define predictors to evaluate
+predictors <- c("J01CA", "J01DD", "J01DH", "J01GB", "J02AC",
+    "B01AA", "B01AB", "B01AC",
+    "C01AA", "C01CA", "C09AA", "C09CA",
+    "N02AA", "N05CD", "N01AH",
+    "L04AD", "L01EG",
+    "R03AC", "R03DC",
+    "H02AA", "H01AA",
+    "B05BB", "B05XA",
+    "A02BA", "A02BC",
+    "D01AC")
+
+# Initialize an empty list to store results
+result <- list()
+
+prescriptions_transformed_survival  <- prescriptions_transformed_survival  %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+  )
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform the statistical test
+  test_result <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", predictor, prescriptions_transformed_survival)
+  
+  # Append the result to the list
+  result[[predictor]] <- test_result
+}
+
+# Combine all results into a single data frame
+final_result <- do.call(rbind, result)
+
+# Print the final results
+print_table(final_result)
+
+rm(final_result, predictors, test_result, param, predictor, km_plots)
+
+```
 
 ### 6.4.3. Outcome 3: Length of ICU Stay by Prescriptions Data
 
@@ -2367,7 +2846,7 @@ result_prescriptions_num <- analyze_predictor_LOS(
 )
 
 # Print the result
-print(result_prescriptions_num)
+print_table(result_prescriptions_num)
 
 # Remove intermediate objects
 rm(result_prescriptions_num, prescriptions_LOS_numbers, prescriptions_los_outcome)
@@ -2377,6 +2856,47 @@ rm(result_prescriptions_num, prescriptions_LOS_numbers, prescriptions_los_outcom
 PRESCRIPTIONS_NUM is a significant predictor for the length of ICU stay based on mixed-effects model results. All groups demonstrate statistical significance (p < 0.001), indicating that the number of prescriptions is associated with variations in ICU stay duration.
 
 PRESCRIPTIONS_NUM should be included in future models for ICU stay prediction.
+
+```{r Length of LOS by Prescriotion Exploratory analysis}
+
+# Define predictors to evaluate
+predictors <- c("J01CA", "J01DD", "J01DH", "J01GB", "J02AC",
+    "B01AA", "B01AB", "B01AC",
+    "C01AA", "C01CA", "C09AA", "C09CA",
+    "N02AA", "N05CD", "N01AH",
+    "L04AD", "L01EG",
+    "R03AC", "R03DC",
+    "H02AA", "H01AA",
+    "B05BB", "B05XA",
+    "A02BA", "A02BC",
+    "D01AC")
+
+# Initialize an empty list to store results
+results <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform assessment for the current predictor
+  result <- analyze_predictor_LOS(data = prescriptions_transformed_los, predictor = predictor, LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+  
+  # Append the result to the list
+  results[[predictor]] <- result
+}
+
+# Combine all results into a single data frame
+table <- do.call(rbind, lapply(names(results), function(predictor) {
+  cbind(Predictor = predictor, results[[predictor]])
+}))
+
+# Convert to data frame for better formatting
+table <- as.data.frame(table)
+
+# Print the final HR table
+print_table(table)
+
+rm(table, results, predictors, predictor)
+
+```
 
 # 7. Laborotory Analyses Data (Blood)
 ## 7.1. Read data
@@ -2416,9 +2936,9 @@ intersection_gas_chemistry <- intersect(labs_blood_gas$LABEL, chemistry$LABEL)
 intersection_hematology_chemistry <- intersect(hematology$LABEL, chemistry$LABEL)
 
 # Print the intersection table
-print(intersection_gas_hematology)
-print(intersection_gas_chemistry)
-print(intersection_hematology_chemistry)
+print_table(intersection_gas_hematology)
+print_table(intersection_gas_chemistry)
+print_table(intersection_hematology_chemistry)
 
 ```
 
@@ -2597,7 +3117,7 @@ outlier_summary <- lapply(numeric_columns, function(col) {
 outlier_summary_table <- do.call(rbind, outlier_summary)
 
 # Print the table
-print(outlier_summary_table)
+print_table(outlier_summary_table)
 
 ```
 All outliers levels are less than 5 % (except Lactate, Ventilation Rate, Oxygen saturation).
@@ -2643,7 +3163,7 @@ outlier_summary <- lapply(numeric_columns, function(col) {
 outlier_summary_table <- do.call(rbind, outlier_summary)
 
 # Print the table
-print(outlier_summary_table)
+print_table(outlier_summary_table)
 
 ```
 
@@ -2827,7 +3347,7 @@ outlier_summary <- lapply(numeric_columns, function(col) {
 outlier_summary_table <- do.call(rbind, outlier_summary)
 
 # Print the table
-print(outlier_summary_table)
+print_table(outlier_summary_table)
 
 ```
 
@@ -2871,19 +3391,20 @@ outlier_summary <- lapply(numeric_columns, function(col) {
 outlier_summary_table <- do.call(rbind, outlier_summary)
 
 # Print the table
-print(outlier_summary_table)
+print_table(outlier_summary_table)
 
 ```
 
 ### 7.2.4. Descriptive statistics (Laboratory Data (Chemistry))
+#### 7.2.4.1. Descriptive statistics for Numerical Variables (Laboratory Data (Chemistry))
 
-Perform data transformation (Chemistry).
+Perform data transformation (Chemistry Last Values).
 
-``` {r Chemistry Data transformation}
+``` {r Chemistry Data transformation last}
 
 unique_labels_list <- chemistry %>%
   group_by(LABEL) %>%
-  summarise(Count = sum(!is.na(VALUENUM)), .groups = "drop") %>%
+  summarise(Count = sum(!is.na(Last_VALUENUM)), .groups = "drop") %>%
   filter(Count > 1000) %>%
   arrange(desc(Count)) %>%
   mutate(LABEL = as.character(LABEL)) %>%  # Convert LABEL to character
@@ -2894,6 +3415,7 @@ unique_labels_list <- chemistry %>%
                       "UREA NITROGEN", 
                       "BICARBONATE", 
                       "GLUCOSE", 
+                      "D-DIMER",
                       "ANION GAP", 
                       "MAGNESIUM", 
                       "PHOSPHATE", 
@@ -2907,31 +3429,29 @@ unique_labels_list <- chemistry %>%
   pull(LABEL) %>%
   as.list()
 
-chemistry <- chemistry %>%
+chemistry_last <- chemistry %>%
+  select(-Mean_VALUENUM) %>%
   # Ensure LABEL is in the unique_labels_list
   filter(LABEL %in% unique_labels_list) %>%
   # Pivot wider using the combined column
   pivot_wider(
     names_from = LABEL,
-    values_from = VALUENUM,
-    values_fill = list(VALUENUM = NA)
+    values_from = Last_VALUENUM,
+    values_fill = list(Last_VALUENUM = NA)
   ) %>%
-  # Drop unnecessary columns
-  select(-CHARTTIME) %>%
   distinct()
 
-chemistry_combined <- chemistry %>%
-  group_by(SUBJECT_ID_COMPOSE, VISIT_NUM) %>%
+chemistry_combined_last <- chemistry_last %>%
+  group_by(SUBJECT_ID_COMPOSE) %>%
   summarise(across(
     everything(), 
     ~ if (all(is.na(.))) NA else na.omit(.)[1], # Keep the first non-NA value for each column
     .names = "{.col}"
   )) %>%
-  select(-SEQ_NUM) %>%
   ungroup()
 
 # Rename columns to replace spaces and commas
-chemistry_combined <- chemistry_combined %>%
+chemistry_combined_last <- chemistry_combined_last %>%
   rename(
     ALT = `ALANINE AMINOTRANSFERASE (ALT)`,
     AST = `ASPARATE AMINOTRANSFERASE (AST)`,
@@ -2941,16 +3461,93 @@ chemistry_combined <- chemistry_combined %>%
   rename_with(~ gsub(" ", "_", .)) %>%
   rename_with(~gsub(",_", "_", .))
   
-rm(chemistry)
 ```
 
-#### 7.2.4.1. Descriptive statistics for Numerical Variables (Laboratory Data (Chemistry))
-
-```{r Descriptive statistics for numerical vars (Laboratory Data (Chemistry)}
+```{r Descriptive statistics for numerical vars (Laboratory Data (Chemistry last)}
 
 # Summarize the statistics for each numeric variable
-chemistry_combined %>%
-  select(-VISIT_NUM) %>%
+chemistry_combined_last %>%
+  select(where(is.numeric)) %>% 
+  summarise(across(everything(), statistics)) %>%
+  pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
+  rename(`Value` = value) %>%
+  flextable() %>%
+  merge_v("Variable") %>%
+  width(j = c("Variable", "Stat", "Value"), width = 2) %>%
+  autofit() %>%
+  border_inner(border = fp_border(color = "black", width = 1)) %>%
+  border_outer(border = fp_border(color = "black", width = 1))
+```
+
+Perform data transformation (Chemistry Mean values by patient).
+
+``` {r Chemistry Data transformation mean}
+
+unique_labels_list <- chemistry %>%
+  group_by(LABEL) %>%
+  summarise(Count = sum(!is.na(Mean_VALUENUM)), .groups = "drop") %>%
+  filter(Count > 1000) %>%
+  arrange(desc(Count)) %>%
+  mutate(LABEL = as.character(LABEL)) %>%  # Convert LABEL to character
+  filter(LABEL %in% c("POTASSIUM", 
+                      "SODIUM", 
+                      "CREATININE", 
+                      "CHLORIDE", 
+                      "UREA NITROGEN", 
+                      "BICARBONATE", 
+                      "GLUCOSE", 
+                      "D-DIMER",
+                      "ANION GAP", 
+                      "MAGNESIUM", 
+                      "PHOSPHATE", 
+                      "CALCIUM, TOTAL", 
+                      "BILIRUBIN, TOTAL", 
+                      "ALANINE AMINOTRANSFERASE (ALT)", 
+                      "ASPARATE AMINOTRANSFERASE (AST)", 
+                      "C-REACTIVE PROTEIN", 
+                      "TROPONIN T", 
+                      "LACTATE DEHYDROGENASE (LD)")) %>%
+  pull(LABEL) %>%
+  as.list()
+
+chemistry_mean <- chemistry %>%
+  select(-Last_VALUENUM) %>%
+  # Ensure LABEL is in the unique_labels_list
+  filter(LABEL %in% unique_labels_list) %>%
+  # Pivot wider using the combined column
+  pivot_wider(
+    names_from = LABEL,
+    values_from = Mean_VALUENUM,
+    values_fill = list(Mean_VALUENUM = NA)
+  ) %>%
+  distinct()
+
+chemistry_combined_mean <- chemistry_mean %>%
+  group_by(SUBJECT_ID_COMPOSE) %>%
+  summarise(across(
+    everything(), 
+    ~ if (all(is.na(.))) NA else na.omit(.)[1], # Keep the first non-NA value for each column
+    .names = "{.col}"
+  )) %>%
+  ungroup()
+
+# Rename columns to replace spaces and commas
+chemistry_combined_mean <- chemistry_combined_mean %>%
+  rename(
+    ALT = `ALANINE AMINOTRANSFERASE (ALT)`,
+    AST = `ASPARATE AMINOTRANSFERASE (AST)`,
+    CRP = `C-REACTIVE PROTEIN`,
+    LD = `LACTATE DEHYDROGENASE (LD)`
+  ) %>%
+  rename_with(~ gsub(" ", "_", .)) %>%
+  rename_with(~gsub(",_", "_", .))
+  
+```
+
+```{r Descriptive statistics for numerical vars (Laboratory Data (Chemistry mean)}
+
+# Summarize the statistics for each numeric variable
+chemistry_combined_mean %>%
   select(where(is.numeric)) %>% 
   summarise(across(everything(), statistics)) %>%
   pivot_longer(cols = everything(), names_sep = "__", names_to = c("Variable", "Stat")) %>%
@@ -2965,7 +3562,7 @@ chemistry_combined %>%
 
 #### 7.2.4.2.   Check for Outliers
 
-```{r Outliers check chemistry}
+```{r Outliers check chemistry last}
 # Function to identify outliers based on IQR
 find_outliers <- function(data, column) {
   Q1 <- quantile(data[[column]], 0.25, na.rm = TRUE)
@@ -2978,19 +3575,18 @@ find_outliers <- function(data, column) {
 }
 
 # Get numeric column names
-numeric_columns <- chemistry_combined %>%
-  select(-VISIT_NUM) %>%
+numeric_columns <- chemistry_combined_last %>%
   select(where(is.numeric)) %>%
   names()
 
 # Calculate outlier statistics for each column
 outlier_summary <- lapply(numeric_columns, function(col) {
   # Find outliers
-  outlier_data <- find_outliers(chemistry_combined, col)
+  outlier_data <- find_outliers(chemistry_combined_last, col)
   
   # Summary stats
   total_outliers <- nrow(outlier_data)
-  total_values <- nrow(chemistry_combined)
+  total_values <- nrow(chemistry_combined_last)
   percentage_outliers <- (total_outliers / total_values) * 100
   
   # Return a summary row
@@ -3006,11 +3602,53 @@ outlier_summary <- lapply(numeric_columns, function(col) {
 outlier_summary_table <- do.call(rbind, outlier_summary)
 
 # Print the table
-print(outlier_summary_table)
+print_table(outlier_summary_table)
 
 ```
 
-Outliers are within normal range.
+```{r Outliers check chemistry mean}
+# Function to identify outliers based on IQR
+find_outliers <- function(data, column) {
+  Q1 <- quantile(data[[column]], 0.25, na.rm = TRUE)
+  Q3 <- quantile(data[[column]], 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  data %>%
+    filter(data[[column]] < lower_bound | data[[column]] > upper_bound)
+}
+
+# Get numeric column names
+numeric_columns <- chemistry_combined_mean %>%
+  select(where(is.numeric)) %>%
+  names()
+
+# Calculate outlier statistics for each column
+outlier_summary <- lapply(numeric_columns, function(col) {
+  # Find outliers
+  outlier_data <- find_outliers(chemistry_combined_mean, col)
+  
+  # Summary stats
+  total_outliers <- nrow(outlier_data)
+  total_values <- nrow(chemistry_combined_mean)
+  percentage_outliers <- (total_outliers / total_values) * 100
+  
+  # Return a summary row
+  data.frame(
+    Variable = col,
+    Total_Values = total_values,
+    Total_Outliers = total_outliers,
+    Percentage_Outliers = round(percentage_outliers, 2)
+  )
+})
+
+# Combine the results into a single table
+outlier_summary_table <- do.call(rbind, outlier_summary)
+
+# Print the table
+print_table(outlier_summary_table)
+
+```
 
 ## 7.3. Visualisation Analysis by Outcome
 ### 7.3.1. Outcome 1: Death Status by Laboratory Data (Blood)
@@ -3310,17 +3948,18 @@ rm(melted_data, filtered_data, numeric_vars, plot)
 ```
 
 #### 7.3.1.3. Blood Chemistry
+##### 7.3.1.3.1. Blood Chemistry the Last Values
 
-```{r Death Status by Laboratory Data (Chemistry)}
-chemistry_death_outcome <- chemistry_combined %>%
+```{r Death Status by Laboratory Data (Chemistry last)}
+chemistry_death_outcome_last <- chemistry_combined_last %>%
   left_join(Death_status_outcome, by = "SUBJECT_ID_COMPOSE") %>%
   select(-SUBJECT_ID) %>%
   filter(!is.na(SURVIVAL_FLAG))
 
 # Visualise how differ all numeric vars according to death status
 # Filter numeric variables with sufficient variance
-numeric_vars <- chemistry_death_outcome %>%
-  select(-SUBJECT_ID_COMPOSE, -SURVIVAL_FLAG, -VISIT_NUM) %>%
+numeric_vars <- chemistry_death_outcome_last %>%
+  select(-SUBJECT_ID_COMPOSE, -SURVIVAL_FLAG) %>%
   select(where(is.numeric)) %>%
   summarise(across(everything(), ~ var(., na.rm = TRUE))) %>%
   pivot_longer(everything(), names_to = "Variable", values_to = "Variance") %>%
@@ -3328,33 +3967,129 @@ numeric_vars <- chemistry_death_outcome %>%
   pull(Variable)
 
 # Filter data for plotting
-filtered_data <- chemistry_death_outcome %>%
-  select(SUBJECT_ID_COMPOSE, VISIT_NUM, SURVIVAL_FLAG, all_of(numeric_vars)) %>%
-  group_by(SURVIVAL_FLAG, VISIT_NUM) %>%
-  summarise(across(everything(), ~ mean(., na.rm = TRUE), .names = "Mean_{.col}"), .groups = "drop")
+filtered_data <- chemistry_death_outcome_last %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, all_of(numeric_vars)) %>%
+  group_by(SURVIVAL_FLAG) %>%
+  summarise(across(everything(), ~ mean(., na.rm = TRUE), .names = "{.col}"), .groups = "drop")
 
 # Melt the data for easier plotting
 melted_data <- filtered_data %>%
-  pivot_longer(cols = -c(SURVIVAL_FLAG, VISIT_NUM), names_to = "Variable", values_to = "Value")
+  pivot_longer(cols = -c(SURVIVAL_FLAG), names_to = "Variable", values_to = "Value") %>%
+  filter(Variable != "SUBJECT_ID_COMPOSE")
 
-# Plot density plots for each variable
-for (variable in unique(melted_data$Variable)) {
-  plot <- ggplot(melted_data %>% filter(Variable == variable), aes(x = VISIT_NUM, y = Value, color = factor(SURVIVAL_FLAG))) +
-    geom_line(size = 1) +
-    geom_point(size = 2, alpha = 0.7) +
-    scale_color_manual(values = c("0" = color_palette[19], "1" = color_palette[21])) +
-    labs(
-      title = paste("Mean of", variable, "by Visit Number and Survival Flag"),
-      x = "Visit Number",
-      y = "Mean Value",
-      color = "Survival Flag"
-    ) +
-    theme_minimal() +
-    theme(legend.position = "top")
+# Plot boxplots for all variables grouped by survival flag
+ggplot(melted_data, aes(x = SURVIVAL_FLAG, y = Value, fill = SURVIVAL_FLAG)) +
+  geom_boxplot() +
+  facet_wrap(~ Variable, scales = "free_y") +
+  theme_custom +
+  labs(
+    title = "Boxplots of Mean Variables for Last Values by Survival Status",
+    x = "Survival Flag",
+    y = "Mean Value",
+    fill = "Survival Flag"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 6))
+
+ggplot(melted_data, aes(x = Variable, y = Value, fill = as.factor(SURVIVAL_FLAG))) +
+  # Jittered points with black outline
+  geom_jitter(
+    position = position_jitter(width = 0.2), 
+    alpha = 1, 
+    shape = 21,      # Shape with both fill and border
+    color = "black", # Black border
+    stroke = 0.5     # Border thickness
+  ) +
+  # Custom theme and colors
+  theme_custom +
+  scale_fill_manual(values = c("0" = color_palette[25], "1" = color_palette[20])) +
   
-  # Print the plot
-  print(plot)
-}
+  # Labels
+  labs(
+    title = "Scatter Plot of Mean Variables for Last Values by Survival Status",
+    x = "Variables",
+    y = "Mean Value",
+    fill = "Survival Flag"
+  ) +
+  
+  # Adjust aesthetics
+  theme(
+    axis.text.x = element_text(angle =90, hjust = 1, size = 6)
+  )
+
+
+rm(melted_data, filtered_data, numeric_vars, plot)
+```
+
+##### 7.3.1.3.1. Blood Chemistry the Mean Values by Patient
+
+```{r Death Status by Laboratory Data (Chemistry mean)}
+chemistry_death_outcome_mean <- chemistry_combined_mean %>%
+  left_join(Death_status_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID) %>%
+  filter(!is.na(SURVIVAL_FLAG))
+
+# Visualise how differ all numeric vars according to death status
+# Filter numeric variables with sufficient variance
+numeric_vars <- chemistry_death_outcome_mean %>%
+  select(-SUBJECT_ID_COMPOSE, -SURVIVAL_FLAG) %>%
+  select(where(is.numeric)) %>%
+  summarise(across(everything(), ~ var(., na.rm = TRUE))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "Variance") %>%
+  filter(Variance > 0) %>%
+  pull(Variable)
+
+# Filter data for plotting
+filtered_data <- chemistry_death_outcome_mean %>%
+  select(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, all_of(numeric_vars)) %>%
+  group_by(SURVIVAL_FLAG) %>%
+  summarise(across(everything(), ~ mean(., na.rm = TRUE), .names = "{.col}"), .groups = "drop")
+
+# Melt the data for easier plotting
+melted_data <- filtered_data %>%
+  pivot_longer(cols = -c(SURVIVAL_FLAG), names_to = "Variable", values_to = "Value") %>%
+  filter(Variable != "SUBJECT_ID_COMPOSE")
+
+# Plot boxplots for all variables grouped by survival flag
+ggplot(melted_data, aes(x = SURVIVAL_FLAG, y = Value, fill = SURVIVAL_FLAG)) +
+  geom_boxplot() +
+  facet_wrap(~ Variable, scales = "free_y") +
+  theme_custom +
+  labs(
+    title = "Boxplots of Mean Variables for Last Values by Survival Status",
+    x = "Survival Flag",
+    y = "Mean Value",
+    fill = "Survival Flag"
+  ) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text = element_text(size = 6))
+
+ggplot(melted_data, aes(x = Variable, y = Value, fill = as.factor(SURVIVAL_FLAG))) +
+  # Jittered points with black outline
+  geom_jitter(
+    position = position_jitter(width = 0.2), 
+    alpha = 1, 
+    shape = 21,      # Shape with both fill and border
+    color = "black", # Black border
+    stroke = 0.5     # Border thickness
+  ) +
+  # Custom theme and colors
+  theme_custom +
+  scale_fill_manual(values = c("0" = color_palette[25], "1" = color_palette[20])) +
+  
+  # Labels
+  labs(
+    title = "Scatter Plot of Mean Variables for Last Values by Survival Status",
+    x = "Variables",
+    y = "Mean Value",
+    fill = "Survival Flag"
+  ) +
+  
+  # Adjust aesthetics
+  theme(
+    axis.text.x = element_text(angle =90, hjust = 1, size = 6)
+  )
+
 
 rm(melted_data, filtered_data, numeric_vars, plot)
 ```
@@ -3479,18 +4214,48 @@ rm(blood_test_params, p)
 ```
 
 #### 7.3.2.3. Blood Chemistry
+##### 7.3.2.3.1. Blood Chemistry the Last Values
 
-```{r Length of Survival by Laboratory Data (Chemistry)}
-chemistry_survival <- chemistry_combined %>%
+```{r Length of Survival by Laboratory Data (Chemistry Last)}
+chemistry_survival_last <- chemistry_combined_last %>%
   left_join(Survival_outcome, by = "SUBJECT_ID_COMPOSE") %>%
   select(-SUBJECT_ID) %>%
   filter(!is.na(SURVIVAL)) 
 
 # Visualise each blood test parameter according to Survival Length
-blood_test_params <- setdiff(names(chemistry_survival), c("SURVIVAL", "SURVIVAL_FLAG", "SUBJECT_ID_COMPOSE", "VISIT_NUM"))
+
+blood_test_params <- setdiff(names(chemistry_survival_last), c("SURVIVAL", "SURVIVAL_FLAG", "SUBJECT_ID_COMPOSE", "VISIT_NUM"))
 
 for (param in blood_test_params) {
-  ggplot(chemistry_survival, aes(x = SURVIVAL, y = .data[[param]])) +
+  ggplot(chemistry_survival_last, aes(x = SURVIVAL, y = .data[[param]])) +
+    stat_bin2d(bins = 50) +
+    scale_fill_gradient(low = "blue", high = "red") +
+    labs(
+      title = paste("Density Heatmap of", param, "vs Survival Length"),
+      x = "Survival Length (Days)",
+      y = param,
+      fill = "Count"
+    ) +
+    theme_minimal() -> p
+  print(p)
+}
+
+rm(blood_test_params, p)
+```
+
+##### 7.3.2.3.2. Blood Chemistry the Mean Values by Patients
+
+```{r Length of Survival by Laboratory Data (Chemistry mean)}
+chemistry_survival_mean <- chemistry_combined_mean %>%
+  left_join(Survival_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID) %>%
+  filter(!is.na(SURVIVAL)) 
+
+# Visualise each blood test parameter according to ICU Stay Length
+blood_test_params <- setdiff(names(chemistry_survival_mean), c("SURVIVAL", "SURVIVAL_FLAG", "SUBJECT_ID_COMPOSE", "VISIT_NUM"))
+
+for (param in blood_test_params) {
+  ggplot(chemistry_survival_mean, aes(x = SURVIVAL, y = .data[[param]])) +
     stat_bin2d(bins = 50) +
     scale_fill_gradient(low = "blue", high = "red") +
     labs(
@@ -3622,18 +4387,45 @@ rm(blood_test_params, p)
 ```
 
 #### 7.3.3.3. Blood Chemistry
+##### 7.3.3.3.1. Blood Chemistry the Last Values
 
-```{r Length of ICU stay by Laboratory Data (Chemistry)}
-chemistry_LOS <- chemistry_combined %>%
+```{r Length of ICU stay by Laboratory Data (Chemistry Last)}
+chemistry_LOS_last <- chemistry_combined_last %>%
   left_join(LOS_outcome, by = "SUBJECT_ID_COMPOSE") %>%
   select(-SUBJECT_ID)
 
 # Visualise each blood test parameter according to ICU stay
-
-blood_test_params <- setdiff(names(chemistry_LOS), c("LOS", "SUBJECT_ID_COMPOSE", "VISIT_NUM", "ICUSTAY_ID"))
+blood_test_params <- setdiff(names(chemistry_LOS_last), c("LOS", "SUBJECT_ID_COMPOSE", "ICUSTAY_ID"))
 
 for (param in blood_test_params) {
-  p <- ggplot(chemistry_LOS, aes(x = LOS, y = .data[[param]])) +
+  p <- ggplot(chemistry_LOS_last, aes(x = LOS, y = .data[[param]])) +
+    stat_bin2d(bins = 50) +
+    scale_fill_gradient(low = "blue", high = "red") +
+    labs(
+      title = paste("Density Heatmap of", param, "vs ICU stay length"),
+      x = "ICU Stay Length (Days)",
+      y = param,
+      fill = "Count"
+    ) +
+    theme_minimal()
+  print(p)
+}
+
+rm(blood_test_params, p)
+```
+
+##### 7.3.3.3.2. Blood Chemistry the Mean Values by Patient
+
+```{r Length of ICU stay by Laboratory Data (Chemistry Mean)}
+chemistry_LOS_mean <- chemistry_combined_mean %>%
+  left_join(LOS_outcome, by = "SUBJECT_ID_COMPOSE") %>%
+  select(-SUBJECT_ID)
+
+# Visualise each blood test parameter according to ICU stay
+blood_test_params <- setdiff(names(chemistry_LOS_mean), c("LOS", "SUBJECT_ID_COMPOSE", "ICUSTAY_ID"))
+
+for (param in blood_test_params) {
+  p <- ggplot(chemistry_LOS_mean, aes(x = LOS, y = .data[[param]])) +
     stat_bin2d(bins = 50) +
     scale_fill_gradient(low = "blue", high = "red") +
     labs(
@@ -3768,7 +4560,7 @@ auc_table <- data.frame(
 )
 
 # Print the table in the console
-print(auc_table)
+print_table(auc_table)
 
 rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
 ```
@@ -3799,7 +4591,7 @@ for (predictor in predictors) {
 final_result <- do.call(rbind, result)
 
 # Print the final results
-print(final_result)
+print_table(final_result)
 
 rm(final_result, predictors, labs_blood_gas_death_outcome_last, test_result, auc_value, param, predictor)
 ```
@@ -3923,7 +4715,7 @@ auc_table <- data.frame(
 )
 
 # Print the table in the console
-print(auc_table)
+print_table(auc_table)
 
 rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
 ```
@@ -3954,7 +4746,7 @@ for (predictor in predictors) {
 final_result <- do.call(rbind, result)
 
 # Print the final results
-print(final_result)
+print_table(final_result)
 
 rm(final_result, predictors, labs_blood_gas_death_outcome_mean, test_result, auc_value, param, predictor)
 ```
@@ -4075,7 +4867,7 @@ auc_table <- data.frame(
 )
 
 # Print the table in the console
-print(auc_table)
+print_table(auc_table)
 
 rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
 ```
@@ -4113,7 +4905,7 @@ for (predictor in predictors) {
 final_result <- do.call(rbind, result)
 
 # Print the final results
-print(final_result)
+print_table(final_result)
 
 rm(final_result, predictors, hematology_death_outcome_last, test_result, auc_value, param, predictor)
 ```
@@ -4233,7 +5025,7 @@ auc_table <- data.frame(
 )
 
 # Print the table in the console
-print(auc_table)
+print_table(auc_table)
 
 rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
 ```
@@ -4272,7 +5064,7 @@ for (predictor in predictors) {
 final_result <- do.call(rbind, result)
 
 # Print the final results
-print(final_result)
+print_table(final_result)
 
 rm(final_result, predictors, hematology_death_outcome_mean, test_result, auc_value, param, predictor)
 ```
@@ -4283,7 +5075,7 @@ rm(final_result, predictors, hematology_death_outcome_mean, test_result, auc_val
 ```{r Death Status by Laboratory Data (Blood) Chemistry last correlation matrix}
 
 # Assuming `labs_blood_gas_death_outcome` contains numeric data and non-numeric columns to be excluded
-correlation_data <- chemistry_death_outcome %>%
+correlation_data <- chemistry_death_outcome_last %>%
   select(where(is.numeric)) %>%
   select(-SURVIVAL_FLAG)
 
@@ -4312,7 +5104,7 @@ Predictors like contain nearly identical information:
 
  Multicollinearity can lead to unstable or unreliable coefficient estimates, but removing any of these predictors could reduce the interpretability of model for clinicians. Each provides insights into different physiological mechanisms that are crucial for ICU survival.
 
-```{r Death Status by Laboratory Data (Blood) Chemistry linear regression}
+```{r Death Status by Laboratory Data (Blood) Chemistry last linear regression}
 # Define predictors to evaluate
 predictors <- c("POTASSIUM", 
                       "SODIUM", 
@@ -4338,8 +5130,8 @@ roc_results <- list()
 # Calculate ROC for each predictor and store results
 for (predictor in predictors) {
   roc_obj <- roc(
-    chemistry_death_outcome$SURVIVAL_FLAG,
-    chemistry_death_outcome[[predictor]],
+    chemistry_death_outcome_last$SURVIVAL_FLAG,
+    chemistry_death_outcome_last[[predictor]],
     plot = FALSE
   )
   roc_results[[predictor]] <- roc_obj
@@ -4409,22 +5201,22 @@ auc_table <- data.frame(
 )
 
 # Print the table in the console
-print(auc_table)
+print_table(auc_table)
 
 rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
 ```
 
 In the provided table, the following predictors should be included in future modeling:
-CREATININE: AUC = 0.603
-UREA_NITROGEN: AUC = 0.675
-BICARBONATE: AUC = 0.625
-ANION_GAP: AUC = 0.608
-BILIRUBIN_TOTAL: AUC = 0.637
-AST: AUC = 0.602
-CRP: AUC = 0.618
-LD: AUC = 0.629
+CREATININE: AUC = 0.622
+UREA_NITROGEN: AUC = 0.681
+BICARBONATE: AUC = 0.618
+ANION_GAP: AUC = 0.633
+BILIRUBIN_TOTAL: AUC = 0.606
+AST: AUC = 0.637
+CRP: AUC = 0.625
+LD: AUC = 0.674
 
-```{r Death Status by Laboratory Data (Blood) Chemistry stat test}
+```{r Death Status by Laboratory Data (Blood) Chemistry last stat test}
 # Define predictors to evaluate
 predictors <- c("POTASSIUM", 
                       "SODIUM", 
@@ -4447,7 +5239,7 @@ predictors <- c("POTASSIUM",
 # Initialize an empty list to store results
 result <- list()
 
-chemistry_death_outcome <- chemistry_death_outcome %>%
+chemistry_death_outcome_last <- chemistry_death_outcome_last %>%
   mutate(
     SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
@@ -4455,7 +5247,7 @@ chemistry_death_outcome <- chemistry_death_outcome %>%
 # Loop through each predictor
 for (predictor in predictors) {
   # Perform the statistical test
-  test_result <- perform_statistical_tests(chemistry_death_outcome, "SURVIVAL_FLAG", predictor, predictor)
+  test_result <- perform_statistical_tests(chemistry_death_outcome_last, "SURVIVAL_FLAG", predictor, predictor)
   
   # Append the result to the list
   result[[predictor]] <- test_result
@@ -4465,11 +5257,201 @@ for (predictor in predictors) {
 final_result <- do.call(rbind, result)
 
 # Print the final results
-print(final_result)
+print_table(final_result)
 
-rm(final_result, predictors, hematology_death_outcome, test_result, auc_value, param, predictor)
+rm(final_result, predictors, hematology_death_outcome_last, test_result, auc_value, param, predictor)
 ```
 
+##### 7.4.1.3.2. Blood Chemistry the Mean Values by Patient
+
+```{r Death Status by Laboratory Data (Blood) Chemistry mean correlation matrix}
+
+# Assuming `labs_blood_gas_death_outcome` contains numeric data and non-numeric columns to be excluded
+correlation_data <- chemistry_death_outcome_mean %>%
+  select(where(is.numeric)) %>%
+  select(-SURVIVAL_FLAG)
+
+# Compute the correlation matrix
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
+
+# Plot the correlation matrix
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         number.cex = 0.3,  
+         addCoef.col = "black", 
+         mar = c(1, 1, 1, 1),
+         cl.cex = 0.8,        
+         tl.cex = 0.3)   
+
+rm(correlation_data, correlation_matrix)
+```
+
+Predictors like contain nearly identical information:
+- ALT and AST, calculated correlation is equal to 0.81
+
+ Multicollinearity can lead to unstable or unreliable coefficient estimates, but removing any of these predictors could reduce the interpretability of model for clinicians. Each provides insights into different physiological mechanisms that are crucial for ICU survival.
+
+```{r Death Status by Laboratory Data (Blood) Chemistry mean linear regression}
+# Define predictors to evaluate
+predictors <- c("POTASSIUM", 
+                      "SODIUM", 
+                      "CREATININE", 
+                      "CHLORIDE", 
+                      "UREA_NITROGEN", 
+                      "BICARBONATE", 
+                      "GLUCOSE", 
+                      "ANION_GAP", 
+                      "MAGNESIUM", 
+                      "PHOSPHATE", 
+                      "CALCIUM_TOTAL", 
+                      "BILIRUBIN_TOTAL", 
+                      "ALT", 
+                      "AST", 
+                      "CRP", 
+                      "TROPONIN_T", 
+                      "LD")
+
+# Prepare a list to store ROC results
+roc_results <- list()
+
+# Calculate ROC for each predictor and store results
+for (predictor in predictors) {
+  roc_obj <- roc(
+    chemistry_death_outcome_mean$SURVIVAL_FLAG,
+    chemistry_death_outcome_mean[[predictor]],
+    plot = FALSE
+  )
+  roc_results[[predictor]] <- roc_obj
+}
+
+# Extract data for ggplot
+roc_data <- do.call(rbind, lapply(names(roc_results), function(predictor) {
+  roc_curve <- roc_results[[predictor]]
+  data.frame(
+    Sensitivity = roc_curve$sensitivities,
+    Specificity = roc_curve$specificities,
+    Predictor = predictor
+  )
+}))
+
+# Combine AUC values for annotation
+auc_values <- sapply(roc_results, function(x) auc(x))
+auc_annotation <- paste(names(auc_values), round(auc_values, 2), sep = ": ", collapse = ", ")
+
+# Generate individual ROC plots for each predictor
+for (predictor in names(roc_results)) {
+  # Extract ROC data for the predictor
+  roc_curve <- roc_results[[predictor]]
+  auc_value <- round(auc(roc_curve), 3)
+  
+  # Prepare data for plotting
+  roc_data <- data.frame(
+    Sensitivity = roc_curve$sensitivities,
+    Specificity = roc_curve$specificities
+  )
+  
+  # Create the ROC plot for the current predictor
+  roc_plot <- ggplot(roc_data, aes(x = 1 - Specificity, y = Sensitivity)) +
+    geom_line(color = "pink", size = 1.2) +
+    labs(
+      title = paste("ROC Curve for", predictor),
+      subtitle = paste("AUC =", auc_value),
+      x = "1 - Specificity",
+      y = "Sensitivity"
+    ) +
+    theme_minimal()
+  
+  # Print the plot for the current predictor
+  print(roc_plot)
+}
+
+# Categorize AUC interpretation based on performance
+auc_interpretation <- function(auc) {
+  if (auc >= 0.9) {
+    return("Outstanding")
+  } else if (auc >= 0.8) {
+    return("Excellent")
+  } else if (auc >= 0.7) {
+    return("Acceptable")
+  } else if (auc >= 0.6) {
+    return("Poor")
+  } else {
+    return("No Discrimination")
+  }
+}
+
+# Add interpretation to the AUC table
+auc_table <- data.frame(
+  Predictor = names(auc_values),
+  AUC = round(auc_values, 3),
+  Interpretation = sapply(auc_values, auc_interpretation)
+)
+
+# Print the table in the console
+print_table(auc_table)
+
+rm(auc_table, auc_interpretation, auc_values, auc_annotation, roc_data, roc_results, predictors, roc_curve, roc_obj, roc_plot)
+```
+
+In the provided table, the following predictors should be included in future modeling:
+CREATININE: AUC = 0.653
+UREA_NITROGEN: AUC = 0.720
+BICARBONATE: AUC = 0.657
+ANION_GAP: AUC = 0.709
+PHOSPHATE: AUC = 0.627
+BILIRUBIN_TOTAL: AUC = 0.623
+AST: AUC = 0.602
+CRP: AUC = 0.664
+LD: AUC = 0.695
+
+```{r Death Status by Laboratory Data (Blood) Chemistry mean stat test}
+# Define predictors to evaluate
+predictors <- c("POTASSIUM", 
+                      "SODIUM", 
+                      "CREATININE", 
+                      "CHLORIDE", 
+                      "UREA_NITROGEN", 
+                      "BICARBONATE", 
+                      "GLUCOSE", 
+                      "ANION_GAP", 
+                      "MAGNESIUM", 
+                      "PHOSPHATE", 
+                      "CALCIUM_TOTAL", 
+                      "BILIRUBIN_TOTAL", 
+                      "ALT", 
+                      "AST", 
+                      "CRP", 
+                      "TROPONIN_T", 
+                      "LD")
+
+# Initialize an empty list to store results
+result <- list()
+
+chemistry_death_outcome_mean <- chemistry_death_outcome_mean %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform the statistical test
+  test_result <- perform_statistical_tests(chemistry_death_outcome_mean, "SURVIVAL_FLAG", predictor, predictor)
+  
+  # Append the result to the list
+  result[[predictor]] <- test_result
+}
+
+# Combine all results into a single data frame
+final_result <- do.call(rbind, result)
+
+# Print the final results
+print_table(final_result)
+
+rm(final_result, predictors, hematology_death_outcome_mean, test_result, auc_value, param, predictor)
+```
 
 ### 7.4.2. Outcome 2: Length of Survival by Laboratory Data (Blood)
 #### 7.4.2.1. Blood Gas
@@ -4501,7 +5483,7 @@ rm(correlation_data, correlation_matrix, result)
 
 No correlations with Survival Length were identified.
 
-```{r Length of Survival  by Laboratory Data (Blood) Blood Gas Last HR }
+```{r Length of Survival  by Laboratory Data (Blood) Blood Gas Mean HR }
 
 # Define predictors to evaluate
 predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "ALVEOLAR_ARTERIAL_GRADIENT", "CALCULATED_TOTAL_CO2", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
@@ -4527,7 +5509,7 @@ hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
 hr_table <- as.data.frame(hr_table)
 
 # Print the final HR table
-print(hr_table)
+print_table(hr_table)
 
 rm(predictors, hr_results, hr_table, labs_blood_gas_survival_last, hr_result)
 ```
@@ -4586,7 +5568,7 @@ hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
 hr_table <- as.data.frame(hr_table)
 
 # Print the final HR table
-print(hr_table)
+print_table(hr_table)
 
 rm(predictors, hr_results, hr_table, labs_blood_gas_survival_mean, hr_result)
 ```
@@ -4646,7 +5628,7 @@ hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
 hr_table <- as.data.frame(hr_table)
 
 # Print the final HR table
-print(hr_table)
+print_table(hr_table)
 
 rm(predictors, hr_results, hr_table)
 ```
@@ -4705,18 +5687,19 @@ hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
 hr_table <- as.data.frame(hr_table)
 
 # Print the final HR table
-print(hr_table)
+print_table(hr_table)
 
 rm(predictors, hr_results, hr_table)
 ```
 
 #### 7.4.2.3. Blood Chemistry
+##### 7.4.2.3.1. Blood Chemistry the Last Values
 
-```{r Length of Survival  by Laboratory Data (Blood) Chemistry correlation matrix}
+```{r Length of Survival  by Laboratory Data (Blood) Chemistry last correlation matrix}
 # Assuming `labs_blood_gas_survival` contains numeric data and non-numeric columns to be excluded
-correlation_data <- chemistry_survival %>%
+correlation_data <- chemistry_survival_last %>%
   select(where(is.numeric)) %>%
-  select(-SURVIVAL_FLAG, -VISIT_NUM)
+  select(-SURVIVAL_FLAG)
 
 # Compute the correlation matrix
 correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
@@ -4738,7 +5721,7 @@ rm(correlation_data, correlation_matrix, result)
 
 No correlation with Survival Length was found. 
 
-```{r Length of Survival  by Laboratory Data (Blood) Chemistry HR }
+```{r Length of Survival  by Laboratory Data (Blood) Chemistry mean HR }
 
 # Define predictors to evaluate
 predictors <- c("POTASSIUM", 
@@ -4765,7 +5748,7 @@ hr_results <- list()
 # Loop through each predictor
 for (predictor in predictors) {
   # Perform Hazard Ratio (HR) assessment for the current predictor
-  hr_result <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", predictor, chemistry_survival)
+  hr_result <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", predictor, chemistry_survival_last)
   
   # Append the result to the list
   hr_results[[predictor]] <- hr_result
@@ -4780,7 +5763,83 @@ hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
 hr_table <- as.data.frame(hr_table)
 
 # Print the final HR table
-print(hr_table)
+print_table(hr_table)
+
+rm(predictors, hr_results, hr_table)
+```
+
+
+##### 7.4.2.3.1. Blood Chemistry the Mean Values by Patient
+
+```{r Length of Survival  by Laboratory Data (Blood) Chemistry mean correlation matrix}
+# Assuming `labs_blood_gas_survival` contains numeric data and non-numeric columns to be excluded
+correlation_data <- chemistry_survival_mean %>%
+  select(where(is.numeric)) %>%
+  select(-SURVIVAL_FLAG)
+
+# Compute the correlation matrix
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
+
+# Plot the correlation matrix
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         number.cex = 0.3,    # Smaller text size for numbers
+         addCoef.col = "black", 
+         mar = c(1, 1, 1, 1),
+         cl.cex = 0.8,        
+         tl.cex = 0.3)   
+
+rm(correlation_data, correlation_matrix, result)
+```
+
+No correlation with Survival Length was found. 
+
+```{r Length of Survival  by Laboratory Data (Blood) Chemistry last HR }
+
+# Define predictors to evaluate
+predictors <- c("POTASSIUM", 
+                      "SODIUM", 
+                      "CREATININE", 
+                      "CHLORIDE", 
+                      "UREA_NITROGEN", 
+                      "BICARBONATE", 
+                      "GLUCOSE", 
+                      "ANION_GAP", 
+                      "MAGNESIUM", 
+                      "PHOSPHATE", 
+                      "CALCIUM_TOTAL", 
+                      "BILIRUBIN_TOTAL", 
+                      "ALT", 
+                      "AST", 
+                      "CRP", 
+                      "TROPONIN_T", 
+                      "LD")
+
+# Initialize an empty list to store results
+hr_results <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform Hazard Ratio (HR) assessment for the current predictor
+  hr_result <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", predictor, chemistry_survival_mean)
+  
+  # Append the result to the list
+  hr_results[[predictor]] <- hr_result
+}
+
+# Combine all results into a single data frame
+hr_table <- do.call(rbind, lapply(names(hr_results), function(predictor) {
+  cbind(Predictor = predictor, hr_results[[predictor]])
+}))
+
+# Convert to data frame for better formatting
+hr_table <- as.data.frame(hr_table)
+
+# Print the final HR table
+print_table(hr_table)
 
 rm(predictors, hr_results, hr_table)
 ```
@@ -4815,7 +5874,7 @@ rm(correlation_data, correlation_matrix)
 
 No correlations with LOS was found.
 
-```{r Death Status by Laboratory Data (Blood Gas) stat tests}
+```{r Death Status by Laboratory Data (Blood Gas) last stat tests}
 # Define predictors to evaluate
 predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "ALVEOLAR_ARTERIAL_GRADIENT", "CALCULATED_TOTAL_CO2", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
   
@@ -4840,13 +5899,10 @@ table <- do.call(rbind, lapply(names(results), function(predictor) {
 table <- as.data.frame(table)
 
 # Print the final HR table
-print(table)
+print_table(table)
 
 rm(table, results, predictors, predictor, labs_blood_gas_LOS_last, blood_gas, labs_blood_gas_combined)
 ```
-
-
-
 
 ##### 7.4.3.1.2. Blood Gas the Mean Value by Patient
 
@@ -4876,7 +5932,7 @@ rm(correlation_data, correlation_matrix)
 
 No correlations with LOS was found.
 
-```{r Death Status by Laboratory Data (Blood Gas) stat tests}
+```{r Death Status by Laboratory Data (Blood Gas) stat mean tests}
 # Define predictors to evaluate
 predictors <- c("HEMOGLOBIN", "BASE_EXCESS", "ALVEOLAR_ARTERIAL_GRADIENT", "CALCULATED_TOTAL_CO2", "FREE_CALCIUM", "LACTATE", "PCO2", "PH", "PO2", "POTASSIUM_WHOLE_BLOOD", "SODIUM_WHOLE_BLOOD", "CHLORIDE_WHOLE_BLOOD", "PEEP", "TEMPERATURE", "OXYGEN", "OXYGEN_SATURATION", "TIDAL_VOLUME", "VENTILATION_RATE", "CALCULATED_BICARBONATE_WHOLE_BLOOD", "O2_FLOW", "METHEMOGLOBIN", "CARBOXYHEMOGLOBIN")
   
@@ -4901,7 +5957,7 @@ table <- do.call(rbind, lapply(names(results), function(predictor) {
 table <- as.data.frame(table)
 
 # Print the final HR table
-print(table)
+print_table(table)
 
 rm(table, results, predictors, predictor, labs_blood_gas_LOS_mean, blood_gas, labs_blood_gas_combined)
 ```
@@ -4935,7 +5991,7 @@ rm(correlation_data, correlation_matrix)
 
 No correlations with LOS was found.
 
-```{r Death Status by Laboratory Data Hematology stat tests}
+```{r Death Status by Laboratory Data Hematology last stat tests}
 # Define predictors to evaluate
 predictors <- c("HEMOGLOBIN", "RED_BLOOD_CELLS", "INR_PT", "LYMPHOCYTES", "MCH", "MCHC", "MCV", "MONOCYTES", "NEUTROPHILS", "EOSINOPHILS", "PLATELET_COUNT", "PTT", "PT", "RDW", "WHITE_BLOOD_CELLS", "FIBRINOGEN_FUNCTIONAL", "BASOPHILS", "SEDIMENTATION_RATE", "RETICULOCYTE_COUNT_AUTOMATED", "D_DIMER")
   
@@ -4960,7 +6016,7 @@ table <- do.call(rbind, lapply(names(results), function(predictor) {
 table <- as.data.frame(table)
 
 # Print the final HR table
-print(table)
+print_table(table)
 
 rm(table, results, predictors, predictor)
 ```
@@ -4994,7 +6050,7 @@ rm(correlation_data, correlation_matrix)
 
 No correlations with LOS was found.
 
-```{r Death Status by Laboratory Data Hematology stat tests}
+```{r Death Status by Laboratory Data Hematology mean stat tests}
 # Define predictors to evaluate
 predictors <- c("HEMOGLOBIN", "RED_BLOOD_CELLS", "INR_PT", "LYMPHOCYTES", "MCH", "MCHC", "MCV", "MONOCYTES", "NEUTROPHILS", "EOSINOPHILS", "PLATELET_COUNT", "PTT", "PT", "RDW", "WHITE_BLOOD_CELLS", "FIBRINOGEN_FUNCTIONAL", "BASOPHILS", "SEDIMENTATION_RATE", "RETICULOCYTE_COUNT_AUTOMATED", "D_DIMER")
   
@@ -5019,18 +6075,18 @@ table <- do.call(rbind, lapply(names(results), function(predictor) {
 table <- as.data.frame(table)
 
 # Print the final HR table
-print(table)
+print_table(table)
 
 rm(table, results, predictors, predictor)
 ```
 
 #### 7.4.3.3. Blood Chemistry
+##### 7.4.3.3.1. Blood Chemistry the Last Values
 
-```{r Length of ICU STAY length  by Laboratory Data (Blood) Chemistry correlation matrix}
+```{r Length of ICU STAY length  by Laboratory Data (Blood) Chemistry last correlation matrix}
 # Assuming `hematology_LOS` contains numeric data and non-numeric columns to be excluded
-correlation_data <- chemistry_LOS %>%
-  select(where(is.numeric)) %>%
-  select(-VISIT_NUM)
+correlation_data <- chemistry_LOS_last %>%
+  select(where(is.numeric)) 
 
 # Compute the correlation matrix
 correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
@@ -5053,7 +6109,7 @@ rm(correlation_data, correlation_matrix)
 
 No correlations with LOS was found.
 
-```{r Death Status by Laboratory Data Chemistry stat tests}
+```{r Death Status by Laboratory Data Chemistry last stat tests}
 # Define predictors to evaluate
 predictors <- c("POTASSIUM", 
                       "SODIUM", 
@@ -5079,7 +6135,7 @@ results <- list()
 # Loop through each predictor
 for (predictor in predictors) {
   # Perform assessment for the current predictor
-  result <- analyze_predictor_LOS(chemistry_LOS, predictor, LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+  result <- analyze_predictor_LOS(chemistry_LOS_last, predictor, LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
   
   # Append the result to the list
   results[[predictor]] <- result
@@ -5094,9 +6150,84 @@ table <- do.call(rbind, lapply(names(results), function(predictor) {
 table <- as.data.frame(table)
 
 # Print the final HR table
-print(table)
+print_table(table)
 
-rm(table, results, predictors, predictor)
+rm(table, results, predictors, predictor, chemistry_LOS_last)
+```
+
+
+##### 7.4.3.3.2. Blood Chemistry the Mean Values by Patient
+
+```{r Length of ICU STAY length  by Laboratory Data (Blood) Chemistry mean correlation matrix}
+# Assuming `hematology_LOS` contains numeric data and non-numeric columns to be excluded
+correlation_data <- chemistry_LOS_mean %>%
+  select(where(is.numeric)) 
+
+# Compute the correlation matrix
+correlation_matrix <- cor(correlation_data, use = "pairwise.complete.obs", method = "pearson")
+
+# Plot the correlation matrix
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45, 
+         number.cex = 0.3,    # Smaller text size for numbers
+         addCoef.col = "black", 
+         mar = c(1, 1, 1, 1),
+         cl.cex = 0.8,        
+         tl.cex = 0.3)   
+
+rm(correlation_data, correlation_matrix)
+
+```
+
+No correlations with LOS was found.
+
+```{r Death Status by Laboratory Data Chemistry mean stat tests}
+# Define predictors to evaluate
+predictors <- c("POTASSIUM", 
+                      "SODIUM", 
+                      "CREATININE", 
+                      "CHLORIDE", 
+                      "UREA_NITROGEN", 
+                      "BICARBONATE", 
+                      "GLUCOSE", 
+                      "ANION_GAP", 
+                      "MAGNESIUM", 
+                      "PHOSPHATE", 
+                      "CALCIUM_TOTAL", 
+                      "BILIRUBIN_TOTAL", 
+                      "ALT", 
+                      "AST", 
+                      "CRP", 
+                      "TROPONIN_T", 
+                      "LD")
+  
+# Initialize an empty list to store results
+results <- list()
+
+# Loop through each predictor
+for (predictor in predictors) {
+  # Perform assessment for the current predictor
+  result <- analyze_predictor_LOS(chemistry_LOS_mean, predictor, LOS = "LOS", patient_id = "SUBJECT_ID_COMPOSE")
+  
+  # Append the result to the list
+  results[[predictor]] <- result
+}
+
+# Combine all results into a single data frame
+table <- do.call(rbind, lapply(names(results), function(predictor) {
+  cbind(Predictor = predictor, results[[predictor]])
+}))
+
+# Convert to data frame for better formatting
+table <- as.data.frame(table)
+
+# Print the final HR table
+print_table(table)
+
+rm(table, results, predictors, predictor, chemistry_LOS_mean)
 ```
 
 # 8. Procedures Data
@@ -5113,9 +6244,7 @@ skimr::skim(procedures %>%
               select(-SUBJECT_ID, -HADM_ID, -SUBJECT_ID_COMPOSE, -ICUSTAY_ID))
 ```
 
-
 ## 8.2. Desriptive Statistics
-
 ### 8.2.1. Descriptive Statistics for Numerical Variables (Procedures data)
 
 ```{r descriptive statistics for numerical vars procedures}
@@ -5473,7 +6602,7 @@ results_procedures_without_duration <- procedures_binary_death_outcome_flags %>%
   })
 
 # Print the results
-print(bind_rows(results_procedures_without_duration,results_selected_procedures ))
+print_table(bind_rows(results_procedures_without_duration,results_selected_procedures ))
 
 # Clean up intermediate variables for procedures without duration
 rm(procedure_labels_binary, procedures_binary_death_outcome_flags)
@@ -5611,7 +6740,7 @@ hr_results_procedures_with_quintiles <- procedures_with_duration_survival_outcom
   })
 
 # Print the combined HR results
-print(bind_rows(hr_table_X_RAY, hr_table_EXTUBATION, hr_table_INTUBATION, hr_results_procedures_with_quintiles))
+print_table(bind_rows(hr_table_X_RAY, hr_table_EXTUBATION, hr_table_INTUBATION, hr_results_procedures_with_quintiles))
 
 # Clean up Kaplan-Meier and Hazard Ratio variables
 rm(fit_procedures_X_RAY, fit_procedures_EXTUBATION, fit_procedures_INTUBATION)
@@ -5684,7 +6813,7 @@ results_procedures_with_duration_LOS <- procedures_with_duration_los_outcome %>%
   })
 
 # Print the results
-print(bind_rows(results_procedures_without_duration_LOS, results_procedures_with_duration_LOS))
+print_table(bind_rows(results_procedures_without_duration_LOS, results_procedures_with_duration_LOS))
 
 # Cleanup for procedures with duration
 rm(procedure_labels_duration, procedures_with_duration_los_outcome)
@@ -5697,73 +6826,113 @@ From the analysis of the mixed-effects linear model on the Length of Stay (LOS) 
 
 On the other hand, "DIALYSIS - CRRT" showed predominantly non-significant results, indicating that it may not be a strong predictor of LOS in the context of this analysis. Therefore, it might be less critical for inclusion in future modeling efforts.
 
-# Result Table
+# 9.    Result Table
 
 ```{r result table}
 
 # Create the data frame with consistent and clear values for merging
 data <- data.frame(
   Predictor = c(
-    "Demographic, socio-economic, and health system factors", "Gender", "Age", 
-    "Admission type", "Marital Status", "Insurance", "Religion", "Ethnicity",
-    "Diagnoses", "Number of diagnoses", "Key Diagnose", "All Diagnoses", 
-    "Isolations", "TELE", "RESP", "CDIFF", "MRSA", "VRE",
-    "Prescriptions", "Number of prescriptions", "ATC", "Generic names",
+    "Demographic factors", "Gender", "Age", 
+    
+    "Socio-economic, and health system factors", "Admission type", "Marital Status", "Insurance", "Religion", "Ethnicity",
+    
+    "Diagnoses", "Number of diagnoses", "ICD9_486: Pneumonia", "ICD9_41071: Acute Myocardial Infarction", "ICD9_41401: Coronary Atherosclerosis", "ICD9_4240: Mitral Valve Disorders", "ICD9_4280: Congestive Heart Failure", "ICD9_5849: Acute Renal Failure", "ICD9_0389: Septicemia", "ICD9_4241: Aortic Valve Disorders", "ICD9_430: Subarachnoid Hemorrhage", "ICD9_431: Intracerebral Hemorrhage", "ICD9_51881: Acute Respiratory Failure", "ICD9_5070: Aspiration Pneumonitis", 
+    
+    "Isolations", "CDIFF", "MRSA", "VRE",
+    
+    "Prescriptions", "Number of prescriptions", "ATC codes", "J01CA: Penicillins with beta-lactamase inhibitors", "J01DD: Third-generation cephalosporins", "J01DH: Carbapenems", "J01GB: Aminoglycosides", "J02AC: Triazole antifungals", "B01AA: Vitamin K antagonists", "B01AB: Heparins", "B01AC: Platelet aggregation inhibitors", "C01AA: Digitalis glycosides", "C01CA: Beta-blocking agents", "C09AA: ACE inhibitors", "C09CA: Angiotensin II receptor blockers", "N02AA: Natural opium alkaloids", "N05CD: Benzodiazepine derivatives", "N01AH: Opioid analgesics", "L04AD: Selective immunosuppressants", "L01EG: Pyrimidine analogues", "R03AC: Selective beta-2-adrenoreceptor agonists", "R03DC: Leukotriene receptor antagonists", "H02AA: Glucocorticoids", "H01AA: Thyroid hormones", "B05BB: Solutions affecting the electrolyte balance", "B05XA: Blood substitutes and perfusion solutions", "A02BA: H2-receptor antagonists", "A02BC: Proton pump inhibitors", "D01AC: Antifungals for topical use",
+    
     "Procedures", "Chest X RAY", "Extubation", "Intubation", "Arterial line", "Invasive ventilation", "Dialysis - CRRT",
-    "Blood Gas", "Base excess", "Free calcium", "Lactate", "PCO2", "PH", "PO2", "Potassium whole blood", "Sodium whole blood", "Chloride whole blood", "PEEP", "Temperature", "Oxygen", "Oxygen saturation", "Tidal volume", "Ventilation rate", "Caclulated bicarbonate whole blood", "O2 flow", "Methehemoglobin", "Carboxyhemoglobin",
-    "Hematology", "Hemoglobin", "INR PT", "Lymphocytes", "MCH", "MCHC", "MCV", "Monocytes", "Neutrophils", "Eosinophils", "Platelet count", "PTT", "RDW", "White blood cells", "Fibrinogen functional", "Basophils", "Sedimentation rate", "Reticulocyte count", "D-dimer",
-    "Blood Chemistry", "Potassium", "Sodium", "Creatinine", "Chloride", "Urea nitrogen", "Bicarbonate", "Glucose", "Anion gap", "Magnesium", "Phosphate", "Calcium total", "Bilirubin total", "ALT", "AST", "CRP", "Trroponin T", "LD" ),
+    
+    "Blood Gas (Last Values)", "Hemoglobin", "Base excess", "Free calcium", "Lactate", "PCO2", "PH", "PO2", "Potassium whole blood", "Sodium whole blood", "Chloride whole blood", "PEEP", "Temperature", "Oxygen", "Oxygen saturation", "Tidal volume", "Ventilation rate", "Caclulated bicarbonate whole blood", "Calculated Total CO2", "Alveolar arterial gradient", "O2 flow", "Methehemoglobin", "Carboxyhemoglobin",
+    
+    "Blood Gas (Mean Values)", "Hemoglobin", "Base excess", "Free calcium", "Lactate", "PCO2", "PH", "PO2", "Potassium whole blood", "Sodium whole blood", "Chloride whole blood", "PEEP", "Temperature", "Oxygen", "Oxygen saturation", "Tidal volume", "Ventilation rate", "Caclulated bicarbonate whole blood", "Calculated Total CO2", "Alveolar arterial gradient", "O2 flow", "Methehemoglobin", "Carboxyhemoglobin",
+    
+    "Hematology (Last Values)", "Hemoglobin", "RBC", "INR PT", "Lymphocytes", "MCH", "MCHC", "MCV", "Monocytes", "Neutrophils", "Eosinophils", "Platelet count", "PTT", "PT", "RDW", "WBC", "Fibrinogen functional", "Basophils", "Sedimentation rate", "Reticulocyte count", "D-dimer",
+    
+    "Hematology (Mean Values)", "Hemoglobin", "RBC", "INR PT", "Lymphocytes", "MCH", "MCHC", "MCV", "Monocytes", "Neutrophils", "Eosinophils", "Platelet count", "PTT", "PT", "RDW", "WBC", "Fibrinogen functional", "Basophils", "Sedimentation rate", "Reticulocyte count", "D-dimer",
+    
+    "Blood Chemistry (Last Values)", "Potassium", "Sodium", "Creatinine", "Chloride", "Urea nitrogen", "Bicarbonate", "Glucose", "Anion gap", "Magnesium", "Phosphate", "Calcium total", "Bilirubin total", "ALT", "AST", "CRP", "Trroponin T", "LD",
+    
+    "Blood Chemistry (Mean Values)", "Potassium", "Sodium", "Creatinine", "Chloride", "Urea nitrogen", "Bicarbonate", "Glucose", "Anion gap", "Magnesium", "Phosphate", "Calcium total", "Bilirubin total", "ALT", "AST", "CRP", "Trroponin T", "LD"),
   
-  Death_Status = c("", "+", "+", "+", "+", "+", "+", "+", "", "+", "+", "+", 
-                   "", "+", "-", "+", "+", "+",
+  Death_Status = c("", "+", "+", 
+                   
+                   "", "+", "+", "+", "+", "+", 
+                   
+                   "", "+", "+", "-", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", 
+                   
                    "", "+", "+", "+",
+                   
+                   "", "+", "", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+",
+                   
                    "", "+", "+", "+", "+", "+", "+",
-                   "", "+", "+", "+", "+", "+", "+", "-", "-", "-", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-",
-                   "", "HEMOGLOBIN", "INR_PT", "LYMPHOCYTES", "MCH", "MCHC", "MCV", "MONOCYTES", "NEUTROPHILS", "EOSINOPHILS", "PLATELET_COUNT", "PTT", "RDW", "WHITE_BLOOD_CELLS", "FIBRINOGEN_FUNCTIONAL", "BASOPHILS", "SEDIMENTATION_RATE", "RETICULOCYTE_COUNT_AUTOMATED", "D_DIMER",
-                   "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+"),
+                   
+                   "", "+", "+", "+", "+", "+", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-",
+                   
+                   "", "+", "+", "+", "+", "+", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-",
+    
+                  "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-", "+",
+                  
+                  "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-", "+",
+                  
+                  "", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+",
+                  
+                  "", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+" ),
   
   
-  Survival = c("", "+", "+", "+", "+", "+", "+", "+", "", "", "Not estimated", "Not estimated", 
-               "", "+", "-", "+", "-", "+",
-               "", "+", "Not estimated", "Not estimated",
+  Survival = c("", "+↓", "+↑", 
+               
+               "", "+↑", "+↑↓", "+↑", "+", "+", 
+               
+               "", "-", "+↑", "-", "+↓", "+↓", "-", "+↑", "+↑", "+↓", "+↑", "+↑", "+↑", "+↑",
+               
+               "", "+↑", "-", "+↑",
+               
+               "", "+", "", "+↓", "-", "+↑", "-", "+↑", "+↓", "+↓", "+↓", "-", "+↑", "+↓", "+↓", "+↑", "+↑", "+↑", "-", "-", "+↓", "+↓", "+↑", "+↑", "-", "+↓", "+↓", "-", "+↓",
+               
                "", "+", "+", "+", "+", "+", "-",
-               "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-",
-               "", "HEMOGLOBIN", "INR_PT", "LYMPHOCYTES", "MCH", "MCHC", "MCV", "MONOCYTES", "NEUTROPHILS", "EOSINOPHILS", "PLATELET_COUNT", "PTT", "RDW", "WHITE_BLOOD_CELLS", "FIBRINOGEN_FUNCTIONAL", "BASOPHILS", "SEDIMENTATION_RATE", "RETICULOCYTE_COUNT_AUTOMATED", "D_DIMER",
-               "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+"),
+               
+               "", "+↓", "+↓", "+↓", "+↑", "+↑", "+↓", "+↓", "+↑", "-", "-", "-", "+↓", "+↑", "+↓", "+↓", "+↑", "+↓", "+↓", "+↑", "+↑", "-", "-",
+               
+               "", "-", "+↓", "+↓", "+↑", "+↑", "+↓", "+↓", "+↑", "+↑", "-", "-", "+↓", "+↑", "+↓", "+↓", "+↑", "+↓", "+↓", "+↑", "+↑", "-", "-",
+    
+    "", "-", "-", "+↑", "+↓", "+↑", "+↓", "+↑", "+↓", "+↑", "+↓", "+↓", "+↑", "+↑", "+↑", "+↑", "-", "+↓", "-", "-", "+↑",
+    
+    "", "+↑", "+↑", "-", "+↓", "+↑", "+↓", "+↑", "+↓", "+↑", "+↓", "+↓", "+↑", "+↑", "+↑", "+↑", "-", "+↓", "-", "-", "+↑",
+    
+    "", "+↑", "+↑", "+↑", "-", "+↑", "+↓", "+↑", "+↑", "+↑", "+↑", "+↓", "+↑", "+↑", "+↑", "+↑", "+↑", "+↑",
+    
+    "", "+↑", "+↑", "+↑", "+↑", "+↑", "+↓", "+↑", "+↑", "+↑", "+↑", "+↓", "+↑", "+↑", "+↑", "+↑", "+↑", "+↑"),
   
   
-  LOS = c("", "-", "+", "+", "-", "+", "+", "-", "", "", "Not estimated", "Not estimated",
-          "", "-", "-", "+", "+", "+",
-          "", "+", "Not estimated", "Not estimated",
+  LOS = c("", "-", "+", 
+          
+          "", "+", "-", "+", "+", "-", 
+
+          "", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "-", "+", "+", 
+          
+          "", "+", "+", "+",
+          
+          "", "+", "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+",
+          
           "", "+", "+", "+", "+", "+", "-",
-          "", "+", "-", "-", "-", "+", "+", "-", "-", "+", "-", "+", "+", "-", "+", "-", "+", "+", "-", "-",
-          "", "HEMOGLOBIN", "INR_PT", "LYMPHOCYTES", "MCH", "MCHC", "MCV", "MONOCYTES", "NEUTROPHILS", "EOSINOPHILS", "PLATELET_COUNT", "PTT", "RDW", "WHITE_BLOOD_CELLS", "FIBRINOGEN_FUNCTIONAL", "BASOPHILS", "SEDIMENTATION_RATE", "RETICULOCYTE_COUNT_AUTOMATED", "D_DIMER",
-          "", "Potassium", "Sodium", "Creatinine", "Chloride", "Urea nitrogen", "Bicarbonate", "Glucose", "Anion gap", "Magnesium", "Phosphate", "Calcium total", "Bilirubin total", "ALT", "AST", "CRP", "TRroponin T", "LD"))
+          
+          "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "-",
+          
+          "", "+", "+", "-", "+", "-", "+", "+", "+", "-", "+", "+", "+", "+", "-", "+", "+", "+", "+", "+", "+", "-", "+",
+    
+    "", "+", "+", "-", "+", "-", "+", "+", "-", "+", "+", "-", "+", "-", "+", "+", "+", "+", "+", "+", "-",
+    
+    "", "+", "+", "-", "+", "-", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+",
+    
+    "", "+", "+", "-", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "+",
+    
+    "", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "+", "-", "+"))
 
-# Replace empty cells with NA for proper vertical merging
-data$Death_Status[data$Death_Status == ""] <- NA
 
-# Create the flextable
-ft <- flextable(data)
-
-# Apply merging and formatting
-ft <- ft %>%
-  set_header_labels(
-    Predictor = "Predictor",
-    Death_Status = "Death Status",
-    Survival = "Survival",
-    LOS = "Length of Stay (LOS)"
-  ) %>%
-  autofit() %>%  # Automatically fit the table
-  theme_vanilla()  # Add a clean theme
-
-# Add padding and alignment for better visuals
-ft <- ft %>%
-  padding(padding = 6, part = "all") %>%
-  align(align = "center", part = "all") %>%
-  align(j = 1, align = "left", part = "all")  # Left-align the Predictor column
-
-# Display the flextable
-ft
+# Use the function to render the table
+print_table(data, format = "html")
 
 ```
