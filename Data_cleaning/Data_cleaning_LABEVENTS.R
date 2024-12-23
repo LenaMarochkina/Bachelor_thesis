@@ -10,7 +10,7 @@ lab_items <- read.csv("data/raw/D_LABITEMS.csv", stringsAsFactors = TRUE)
 
 # Select necessary columns
 labs <- labs %>%
-  select(SUBJECT_ID, HADM_ID, ITEMID, CHARTTIME, VALUE, VALUENUM, VALUEUOM, FLAG)
+  select(SUBJECT_ID, HADM_ID, ITEMID, CHARTTIME, VALUE, VALUENUM, VALUEUOM)
 
 # Normalize the columns by converting everything to uppercase
 labs <- labs %>%
@@ -178,14 +178,6 @@ labs_clean <- labs_clean %>%
    VALUEUOM = as.factor(VALUEUOM)
 )
 
-# Add seq_num for each analysis
-labs_clean <- labs_clean %>%
-  arrange(SUBJECT_ID, HADM_ID, CATEGORY, CHARTTIME) %>%  # Ensure data is sorted by PatientID, Category, and Time
-  group_by(SUBJECT_ID, HADM_ID, CATEGORY, CHARTTIME) %>%  # Group by PatientID, Category, and Time
-  mutate(
-    SEQ_NUM = row_number()  # Create a sequence within each group starting from 1
-  ) %>%
-  ungroup()  # Ungroup after the mutation
 
 # Clean VALUE COL
 labs_clean <- labs_clean %>%
@@ -229,14 +221,21 @@ labs_clean <- labs_clean %>%
     LABEL = as.factor(LABEL)
   )
 
-LABS_VALUE <- labs_clean %>%
-  filter(!is.na(VALUE)) %>%
-  select (VALUE, VALUENUM, VALUEUOM, LABEL, CATEGORY) %>%
-  distinct()
-
 # Create composed Subject_id
 labs_clean <- labs_clean %>%
   mutate(SUBJECT_ID_COMPOSE = paste(SUBJECT_ID, HADM_ID, sep = "_"))
+
+labs_clean <- labs_clean %>%
+  group_by(SUBJECT_ID_COMPOSE, ITEMID, FLUID, CATEGORY, LABEL) %>%
+  summarize(
+    # Aggregated columns
+    Last_VALUENUM = VALUENUM[1],  # Assuming this is the last value after pre-filtering
+    Mean_VALUENUM = mean(VALUENUM, na.rm = TRUE),
+    # Non-aggregated columns
+    VALUE = VALUE[1],
+    VALUEUOM = VALUEUOM[1],
+    .groups = "drop"
+  ) 
 
 # Write cleaned admissions to csv
 write.csv(labs_clean, "data/raw/cleaned/LABEVENTS_clean.csv", row.names = FALSE)
