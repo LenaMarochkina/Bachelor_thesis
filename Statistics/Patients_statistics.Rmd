@@ -7014,35 +7014,35 @@ death_status <- death_status %>%
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 labs_blood_gas_death_outcome_last <- labs_blood_gas_death_outcome_last %>%
-  rename_with(~ paste0("LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+  rename_with(~ paste0("BG_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
 
 death_status <- death_status %>%
   left_join(labs_blood_gas_death_outcome_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix MEAN_
 labs_blood_gas_death_outcome_mean <- labs_blood_gas_death_outcome_mean %>%
-  rename_with(~ paste0("MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+  rename_with(~ paste0("BG_MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
 
 death_status <- death_status %>%
   left_join(labs_blood_gas_death_outcome_mean, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 hematology_death_outcome_last <- hematology_death_outcome_last %>%
-  rename_with(~ paste0("LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+  rename_with(~ paste0("H_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
 
 death_status <- death_status %>%
   left_join(hematology_death_outcome_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix MEAN_
 hematology_death_outcome_mean <- hematology_death_outcome_mean %>%
-  rename_with(~ paste0("MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+  rename_with(~ paste0("H_MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
 
 death_status <- death_status %>%
   left_join(hematology_death_outcome_mean, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 chemistry_death_outcome_last <- chemistry_death_outcome_last %>%
-  rename_with(~ paste0("LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG)) 
+  rename_with(~ paste0("CH_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG)) 
 
 death_status <- death_status %>%
   left_join(chemistry_death_outcome_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
@@ -7053,7 +7053,7 @@ death_status <- death_status %>%
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix MEAN_
 chemistry_death_outcome_mean <- chemistry_death_outcome_mean %>%
-  rename_with(~ paste0("MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+  rename_with(~ paste0("CH_MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
 
 death_status <- death_status %>%
   left_join(chemistry_death_outcome_mean, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
@@ -7082,6 +7082,7 @@ death_status <- death_status %>%
 
 # Save to CSV to directory prepared_to_prediction
 write_csv(death_status, "../data/prepared_to_prediction/Death_status.csv")
+
 
 ```
 
