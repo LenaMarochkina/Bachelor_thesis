@@ -6,7 +6,7 @@ output:
   html_document:
     df_print: paged
     toc: yes
-    toc_depth: 4
+    toc_depth: 6
 ---
 
 ```{r setup, include=FALSE}
@@ -6930,46 +6930,52 @@ print_table(data, format = "html")
 ```
 
 # 10. Prepare DataSet for Future Modeling
+# 10.1. Dataset for Future Modeling Survival Outcome
 
 ```{r Prepare DataSet for Future Modeling Death Outcome}
 patients_death_status <- patients_death_status %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
 diagnoses_transformed_death_outcome <- diagnoses_transformed_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
-labs_blood_gas_death_outcome_last <- labs_blood_gas_death_outcome_last %>%
+admissions_death_outcome <- admissions_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
-labs_blood_gas_death_outcome_mean <- labs_blood_gas_death_outcome_mean %>%
+diagnoses_death_outcome <- diagnoses_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
-hematology_death_outcome_last <- hematology_death_outcome_last %>%
+prescriptions_transformed_death_outcome <- prescriptions_transformed_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
-hematology_death_outcome_mean <- hematology_death_outcome_mean %>%
+prescriptions_number <- prescriptions_number %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
-chemistry_death_outcome_last <- chemistry_death_outcome_last %>%
+isolations_death_outcome <- isolations_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
-chemistry_death_outcome_mean <- chemistry_death_outcome_mean %>%
+procedures_with_duration_death_outcome <- procedures_with_duration_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+procedures_binary_death_outcome_flags <- procedures_binary_death_outcome_flags %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
   )
 
 death_status <- admissions_death_outcome %>%
@@ -7011,7 +7017,6 @@ death_status <- death_status %>%
   mutate(across(starts_with("REQUEST"), ~ replace_na(., 0))) %>%  # Replace NA with 0
   mutate(across(starts_with("REQUEST"), ~ as.factor(.)))
   
-
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 labs_blood_gas_death_outcome_last <- labs_blood_gas_death_outcome_last %>%
   rename_with(~ paste0("BG_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
@@ -7019,26 +7024,12 @@ labs_blood_gas_death_outcome_last <- labs_blood_gas_death_outcome_last %>%
 death_status <- death_status %>%
   left_join(labs_blood_gas_death_outcome_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
-# Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix MEAN_
-labs_blood_gas_death_outcome_mean <- labs_blood_gas_death_outcome_mean %>%
-  rename_with(~ paste0("BG_MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
-
-death_status <- death_status %>%
-  left_join(labs_blood_gas_death_outcome_mean, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
-
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 hematology_death_outcome_last <- hematology_death_outcome_last %>%
   rename_with(~ paste0("H_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
 
 death_status <- death_status %>%
   left_join(hematology_death_outcome_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
-
-# Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix MEAN_
-hematology_death_outcome_mean <- hematology_death_outcome_mean %>%
-  rename_with(~ paste0("H_MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
-
-death_status <- death_status %>%
-  left_join(hematology_death_outcome_mean, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 chemistry_death_outcome_last <- chemistry_death_outcome_last %>%
@@ -7051,23 +7042,23 @@ death_status <- death_status %>%
   mutate(across(starts_with("LAST"), ~ replace_na(., 0))) %>%  # Replace NA with 0
   mutate(across(starts_with("LAST"), ~ as.factor(.)))
 
-# Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix MEAN_
-chemistry_death_outcome_mean <- chemistry_death_outcome_mean %>%
-  rename_with(~ paste0("CH_MEAN_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
-
-death_status <- death_status %>%
-  left_join(chemistry_death_outcome_mean, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
-  # All NA's change to 0 in columns from prescriptions_transformed_death_outcome
-  mutate(across(starts_with("MEAN"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
-  mutate(across(starts_with("MEAN"), ~ replace_na(., 0))) %>%  # Replace NA with 0
-  mutate(across(starts_with("MEAN"), ~ as.factor(.)))
-
 procedures_with_duration_death_outcome_long <- procedures_with_duration_death_outcome %>%
   pivot_wider(
     names_from = LABEL,   # Column to turn into new column names
-    values_from = VALUE   # Column to populate the new columns
-  )
-
+    values_from = VALUE,   # Column to populate the new columns
+    values_fn = list(VALUE = ~ sum(.))  # Sum values if more than 1
+  ) %>%
+  select(-"NA") %>%
+  rename(
+    ARTERIAL_LINE = "ARTERIAL LINE",
+    INVASIVE_VENTILATION = "INVASIVE VENTILATION",
+    MULTI_LUMEN = "MULTI LUMEN",
+    DIALYSIS_CRRT = "DIALYSIS - CRRT"
+  ) %>%
+  # All NULL to 0
+  mutate(across(c("ARTERIAL_LINE", "INVASIVE_VENTILATION", "MULTI_LUMEN", "DIALYSIS_CRRT"), ~ as.numeric(as.character(.)))) %>%  
+  mutate(across(c("ARTERIAL_LINE", "INVASIVE_VENTILATION", "MULTI_LUMEN", "DIALYSIS_CRRT"), ~ replace_na(., 0)))
+           
 death_status <- death_status %>%
   left_join(procedures_with_duration_death_outcome_long, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
 
@@ -7078,11 +7069,17 @@ death_status <- death_status %>%
   left_join(procedures_binary_death_outcome_flags, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
   mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
   mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ replace_na(., 0))) %>%  # Replace NA with 0
-  mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ as.factor(.)))  # Convert back to factors
+  mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ as.factor(.)))
 
 # Save to CSV to directory prepared_to_prediction
 write_csv(death_status, "../data/prepared_to_prediction/Death_status.csv")
 
+```
+
+## 10.2. Dataset for Future Modeling Survival Time
+
+```{r Prepare DataSet for Future Modeling Survival Time}
 
 ```
+
 
