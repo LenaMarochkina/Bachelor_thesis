@@ -32,6 +32,43 @@ library(MLmetrics)
     
 ```
 
+```{r Metrics function}
+# Function to print metrics
+print_metrics <- function(model, test_data, test_probabilities, test_predictions) {
+  # Confusion Matrix
+  conf_matrix <- confusionMatrix(test_predictions, test_data$SURVIVAL_FLAG)
+  cat("Confusion Matrix:\n")
+  print(conf_matrix)
+  
+  # Plot ROC curve
+  roc_curve <- roc(test_data$SURVIVAL_FLAG, test_probabilities) 
+  plot(
+    roc_curve,
+    col = "darkorange",
+    lwd = 2,
+    main = "ROC Curve",
+    print.auc = TRUE
+  )
+  
+  # Metrics
+  accuracy <- Accuracy(test_data$SURVIVAL_FLAG, test_predictions)
+  sensitivity <- Recall(test_data$SURVIVAL_FLAG, test_predictions)
+  specificity <- Specificity(test_data$SURVIVAL_FLAG, test_predictions)
+  precision <- Precision(test_data$SURVIVAL_FLAG, test_predictions)
+
+  # Calculate F1-score
+  f1_score <- 2 * (precision * sensitivity) / (precision + sensitivity)
+  AUC <- auc(roc_curve)
+
+  cat("Accuracy:", accuracy, "\n")
+  cat("Sensitivity (Recall):", sensitivity, "\n")
+  cat("Specificity:", specificity, "\n")
+  cat("Precision:", precision, "\n")
+  cat("F1-score:", f1_score, "\n")
+  cat("AUC:", AUC, "\n")
+}
+```
+
 # 1. Outcomes Data
 
 ## 1.1. Read Data
@@ -39,165 +76,154 @@ library(MLmetrics)
 ```{r read data}
 death_status <- read.csv("../data/prepared_to_prediction/Death_status.csv", stringsAsFactors = TRUE)
 
-death_status_choosen_predictors <- death_status %>%
-  select(-ICD9_41071, ICD9_4280, ICD9_41071, ATC_J01CA, ATC_L01EG, BG_LAST_SODIUM_WHOLE_BLOOD, BG_LAST_METHEMOGLOBIN,
-BG_LAST_CARBOXYHEMOGLOBIN, H_LAST_SEDIMENTATION_RATE, H_LAST_RETICULOCYTE_COUNT_AUTOMATED, CH_LAST_CHLORIDE)
-
 # Ensure SURVIVAL_FLAG is a factor for classification
-death_status_choosen_predictors <- death_status_choosen_predictors %>%
+death_status <- death_status %>%
   mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)) %>%
   select(-SUBJECT_ID_COMPOSE, -SUBJECT_ID, -BG_LAST_VENTILATOR)
 ```
 
 ```{r missing values}
-
-# Count missing values for each column
-sapply(death_status_choosen_predictors, function(x) sum(is.na(x)))
-
-death_status_choosen_predictors <- death_status_choosen_predictors %>%
-  mutate(across(where(is.numeric), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+death_status <- death_status %>%
+  mutate(across(
+    where(is.numeric), 
+    ~ round(ifelse(is.na(.), mean(., na.rm = TRUE), .), 2)
+  ))
 ```
 
 # 2. Death Status
 ## 2.1. Desicion Tree Model
 
-```{r Decision Tree Model}
+```{r Decision Tree Model unbalanced}
 # Set seed for reproducibility
-set.seed(123)
+set.seed(12)
 
-# Split the data into training and testing sets (80-20 split)
-train_index <- createDataPartition(death_status_choosen_predictors$SURVIVAL_FLAG, p = 0.7, list = FALSE)
+# Split the data into training (60%), validation (20%), and testing (20%)
+train_val_index <- createDataPartition(death_status$SURVIVAL_FLAG, p = 0.8, list = FALSE)
+train_val_data <- death_status[train_val_index, ]
+test_data <- death_status[-train_val_index, ]
 
-train_data <- death_status_choosen_predictors[train_index, ]
-test_data <- death_status_choosen_predictors[-train_index, ]
-
-# Ensure the target variable is a factor
-train_data$SURVIVAL_FLAG <- as.factor(train_data$SURVIVAL_FLAG)
-test_data$SURVIVAL_FLAG <- as.factor(test_data$SURVIVAL_FLAG)
-
-# Apply undersampling to balance the dataset
-desired_majority_class <- sum(train_data$SURVIVAL_FLAG == 1) # Match majority size to minority size
-total_size <- 2 * desired_majority_class
-
-# Adjust the proportion to balance the classes without reducing too much
-train_data_balanced <- ovun.sample(
-  SURVIVAL_FLAG ~ ., 
-  data = train_data, 
-  method = "under", 
-  N = total_size, 
-  seed = 123
-)$data
-
-# Check class distribution
-table(train_data_balanced$SURVIVAL_FLAG)
-
-# Check class distribution after SMOTE
-cat("Class distribution after balance:\n")
-print(table(train_data_balanced$SURVIVAL_FLAG))
+train_index <- createDataPartition(train_val_data$SURVIVAL_FLAG, p = 0.75, list = FALSE)
+train_data <- train_val_data[train_index, ]
+validation_data <- train_val_data[-train_index, ]
 
 # Train the Decision Tree with tuned parameters
-decision_tree_tuned <- rpart(
+decision_tree_tuned_unbalanced <- rpart(
   SURVIVAL_FLAG ~ .,
-  data = train_data_balanced,
+  data = train_data,
   method = "class",
   control = rpart.control(cp = 0.01, minsplit = 20, maxdepth = 5)
 )
 
 # Visualize the Decision Tree
-rpart.plot(decision_tree_tuned, type = 2, extra = 104, tweak = 1.2, main = "Tuned Decision Tree")
+rpart.plot(decision_tree_tuned_unbalanced, type = 2, extra = 104, tweak = 1.2, main = "Tuned Decision Tree")
 
-# Make predictions on the test set
-probabilities <- predict(decision_tree_tuned, test_data, type = "prob")
-predictions_tuned <- predict(decision_tree_tuned, test_data, type = "class")
+# Make predictions on the validation set
+probabilities_unbalanced <- predict(decision_tree_tuned_unbalanced, validation_data, type = "prob")
+predictions_unbalanced <- predict(decision_tree_tuned_unbalanced, validation_data, type = "class")
 
-# Evaluate the model with a confusion matrix
-conf_matrix_tuned <- confusionMatrix(predictions_tuned, test_data$SURVIVAL_FLAG)
-cat("Confusion Matrix:\n")
-print(conf_matrix_tuned)
-
-# Variable importance
-importance <- as.data.frame(varImp(decision_tree_tuned, scale = TRUE))
-colnames(importance) <- c("Importance")
-importance <- tibble::rownames_to_column(importance, var = "Variable")
-
-# Assuming 'importance' is your data frame of variable importance
-# Calculate the top 10% of variables
-top_n <- ceiling(0.1 * nrow(importance))  # Get 10% of the variables
-
-# Subset the top 10% variables by importance
-top_importance <- importance %>%
-  arrange(desc(Importance)) %>%
-  slice_head(n = top_n)
-
-# Plot the top 10% variables
-ggplot(top_importance, aes(x = reorder(Variable, Importance), y = Importance)) +
-  geom_bar(stat = "identity", fill = "steelblue") +
-  coord_flip() +
-  labs(
-    title = "Top 10% Variable Importance",
-    x = "Variables",
-    y = "Importance"
-  ) +
-  theme_minimal() +
-  theme(
-    axis.text.y = element_text(size = 8),  # Adjust text size for better readability
-    plot.title = element_text(size = 14)
-  )
-
-# Plot the ROC Curve
-roc_curve <- roc(test_data$SURVIVAL_FLAG, probabilities[, 2])
-plot(
-  roc_curve,
-  col = "blue",
-  lwd = 2,
-  main = "ROC Curve for Decision Tree",
-  print.auc = TRUE
-)
-
-# Visualize Decision Boundaries (Optional: Replace 'Feature1' and 'Feature2' with actual column names)
-plot_decision_boundary <- function(model, data, features, target, title = "Decision Boundary") {
-  x_min <- min(data[[features[1]]]) - 1
-  x_max <- max(data[[features[1]]]) + 1
-  y_min <- min(data[[features[2]]]) - 1
-  y_max <- max(data[[features[2]]]) + 1
-  grid <- expand.grid(
-    x = seq(x_min, x_max, length.out = 100),
-    y = seq(y_min, y_max, length.out = 100)
-  )
-  colnames(grid) <- features
-
-  grid$predicted <- predict(model, newdata = grid, type = "class")
-
-  ggplot(data, aes_string(x = features[1], y = features[2], color = target)) +
-    geom_point(alpha = 0.6) +
-    geom_tile(data = grid, aes(fill = predicted), alpha = 0.3, color = NA) +
-    labs(title = title, x = features[1], y = features[2]) +
-    theme_minimal()
-}
+# Call the function with predictions and probabilities
+print_metrics(decision_tree_tuned_unbalanced, validation_data, probabilities_unbalanced[, 2], predictions_unbalanced)
 
 ```
 
-## 2.2. Random Forest Model
-
-```{r Random Forest Model}
-# Set seed for reproducibility
-set.seed(123)
-
-# Split the data into training and testing sets (80-20 split)
-train_index <- createDataPartition(death_status_choosen_predictors$SURVIVAL_FLAG, p = 0.8, list = FALSE)
-
-train_data <- death_status_choosen_predictors[train_index, ]
-test_data <- death_status_choosen_predictors[-train_index, ]
-
-# Check the original class distribution
-cat("Original class distribution:\n")
-print(table(train_data$SURVIVAL_FLAG))
+```{r Decision Tree Model undersampling}
 
 # Apply undersampling to balance the dataset
-desired_majority_class <- sum(train_data$SURVIVAL_FLAG == 1) # Match majority size to minority size
-total_size <- 2 * desired_majority_class
+desired_majority_class_UND <- sum(train_data$SURVIVAL_FLAG == 1) # Match majority size to minority size
+total_size_UND <- 2 * desired_majority_class_UND
 
-train_data_balanced <- ovun.sample(
+# Adjust the proportion to balance the classes without reducing too much
+train_data_balanced_UND <- ovun.sample(
+  SURVIVAL_FLAG ~ ., 
+  data = train_data, 
+  method = "under", 
+  N = total_size_UND, 
+  seed = 123
+)$data
+
+# Check class distribution after SMOTE
+cat("Class distribution after balance:\n")
+print(table(train_data_balanced_UND$SURVIVAL_FLAG))
+
+# Train the Decision Tree with tuned parameters
+decision_tree_UND <- rpart(
+  SURVIVAL_FLAG ~ .,
+  data = train_data_balanced_UND,
+  method = "class",
+  control = rpart.control(cp = 0.01, minsplit = 20, maxdepth = 5)
+)
+
+# Visualize the Decision Tree
+rpart.plot(decision_tree_UND, type = 2, extra = 104, tweak = 1.2, main = "Tuned Decision Tree (Undersampling balanced)")
+
+# Make predictions on the validation set
+probabilities_UND <- predict(decision_tree_UND, validation_data, type = "prob")
+predictions_UND <- predict(decision_tree_UND, validation_data, type = "class")
+
+# Call the function with predictions and probabilities
+print_metrics(decision_tree_UND, validation_data, probabilities_UND[, 2], predictions_UND)
+
+```
+
+
+## 2.2. Random Forest Model
+```{r Random Forest Model simple}
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Set up the grid of hyperparameters for tuning
+tune_grid <- expand.grid(
+  mtry = c(10, 12, 15, 20, 30),   
+  ntree = c(100, 200, 300, 400, 500), # Number of trees
+  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
+)
+
+# Tune the model using validation set
+best_model <- NULL
+best_auc <- 0
+
+for (i in 1:nrow(tune_grid)) {
+  cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
+  model <- randomForest(
+    SURVIVAL_FLAG ~ ., 
+    data = train_data, 
+    ntree = tune_grid[i, "ntree"], 
+    mtry = tune_grid[i, "mtry"], 
+    maxnodes = tune_grid[i, "maxnodes"],
+    importance = TRUE
+  )
+  
+# Evaluate on validation set
+  validation_probabilities <- predict(model, validation_data, type = "prob")[, 2]
+  roc_curve <- roc(validation_data$SURVIVAL_FLAG, validation_probabilities)
+  auc <- auc(roc_curve)
+  
+  cat("AUC for current configuration:", auc, "\n")
+  
+  if (auc > best_auc) {
+    best_model <- model
+    best_auc <- auc
+  }
+}
+
+cat("Best AUC:", best_auc, "\n")
+
+# Metrics
+probabilities <- predict(best_model, validation_data, type = "prob")[, 2]
+predictions <- predict(best_model, validation_data, type = "class")
+
+# Call the function with predictions and probabilities
+print_metrics(best_model, validation_data, probabilities, predictions)
+
+```
+
+```{r Random Forest Model balanced}
+# Apply undersampling to balance the training dataset
+desired_majority_class_RF_UND <- sum(train_data$SURVIVAL_FLAG == 1) # Match majority size to minority size
+total_size <- 2 * desired_majority_class_RF_UND
+
+train_data_balanced_RF_UND <- ovun.sample(
   SURVIVAL_FLAG ~ ., 
   data = train_data, 
   method = "under", 
@@ -206,235 +232,357 @@ train_data_balanced <- ovun.sample(
 )$data
 
 # Check the class distribution after balancing
-cat("Balanced class distribution:\n")
-print(table(train_data_balanced$SURVIVAL_FLAG))
+cat("Balanced Training Class Distribution:\n")
+print(table(train_data_balanced_RF_UND$SURVIVAL_FLAG))
 
-# Ensure the target variable is a factor
-train_data_balanced$SURVIVAL_FLAG <- as.factor(train_data_balanced$SURVIVAL_FLAG)
-test_data$SURVIVAL_FLAG <- as.factor(test_data$SURVIVAL_FLAG)
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
 
-# Train the Random Forest model
-set.seed(123)
-random_forest_model <- randomForest(
-  SURVIVAL_FLAG ~ ., 
-  data = train_data_balanced, 
-  ntree = 1000,          # Number of trees
-  mtry = sqrt(ncol(train_data_balanced) - 1), # Number of features considered at each split
-  importance = TRUE     # Calculate variable importance
+# Set up the grid of hyperparameters for tuning
+tune_grid <- expand.grid(
+  mtry = c(10, 12, 15, 20, 30),   
+  ntree = c(100, 200, 300, 400, 500), # Number of trees
+  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
 )
 
-# Print the Random Forest model summary
-print(random_forest_model)
+# Tune the model using validation set
+best_model <- NULL
+best_auc <- 0
 
-# Evaluate the model on the test set
-predictions_rf <- predict(random_forest_model, test_data)
-conf_matrix_rf <- confusionMatrix(predictions_rf, test_data$SURVIVAL_FLAG)
+for (i in 1:nrow(tune_grid)) {
+  cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
+  model <- randomForest(
+    SURVIVAL_FLAG ~ ., 
+    data = train_data_balanced_RF_UND, 
+    ntree = tune_grid[i, "ntree"], 
+    mtry = tune_grid[i, "mtry"], 
+    maxnodes = tune_grid[i, "maxnodes"],
+    importance = TRUE
+  )
+  
+  # Evaluate on validation set
+  validation_probabilities <- predict(model, validation_data, type = "prob")[, 2]
+  roc_curve <- roc(validation_data$SURVIVAL_FLAG, validation_probabilities)
+  auc <- auc(roc_curve)
+  
+  cat("AUC for current configuration:", auc, "\n")
+  
+  if (auc > best_auc) {
+    best_model <- model
+    best_auc <- auc
+  }
+}
 
-# Print the confusion matrix
-cat("Confusion Matrix:\n")
-print(conf_matrix_rf)
+cat("Best AUC:", best_auc, "\n")
 
-# Get variable importance
-importance <- importance(random_forest_model)
-var_importance <- data.frame(Variables = rownames(importance), Importance = importance[, 1])
+# Metrics
+probabilities <- predict(best_model, validation_data, type = "prob")[, 2]
+predictions <- predict(best_model, validation_data, type = "class")
 
-# Plot with smaller text
-barplot(
-  var_importance$Importance,
-  names.arg = var_importance$Variables,
-  las = 2,                          
-  cex.names = 0.3,                  
-  col = "steelblue",               
-  main = "Variable Importance",
-  ylab = "Mean Decrease in Gini"
+# Call the function with predictions and probabilities
+print_metrics(best_model, validation_data, probabilities, predictions)
+```
+
+```{r Random Forest Model weighted}
+# Compute class weights based on training data
+class_counts <- table(train_data$SURVIVAL_FLAG)
+total_samples <- sum(class_counts)
+class_weights <- total_samples / (length(class_counts) * class_counts)
+print("Class Weights:")
+print(class_weights)
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Set up the grid of hyperparameters for tuning
+tune_grid <- expand.grid(
+  mtry = c(10, 12, 15, 20, 30),   
+  ntree = c(100, 200, 300, 400, 500), # Number of trees
+  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
 )
 
-# Calculate probabilities for ROC curve
-probabilities_rf <- predict(random_forest_model, test_data, type = "prob")
+# Tune the model using validation set
+best_model <- NULL
+best_auc <- 0
 
-# Plot the ROC Curve
-roc_curve_rf <- roc(test_data$SURVIVAL_FLAG, probabilities_rf[, 2])
-plot(
-  roc_curve_rf,
-  col = "darkorange",
-  lwd = 2,
-  main = "ROC Curve for Random Forest",
-  print.auc = TRUE
-)
+for (i in 1:nrow(tune_grid)) {
+  cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
+  model <- randomForest(
+    SURVIVAL_FLAG ~ ., 
+    data = train_data, 
+    ntree = tune_grid[i, "ntree"], 
+    mtry = tune_grid[i, "mtry"], 
+    maxnodes = tune_grid[i, "maxnodes"],
+    importance = TRUE,
+    classwt = class_weights
+  )
+  
+  # Evaluate on validation set
+  validation_probabilities <- predict(model, validation_data, type = "prob")[, 2]
+  roc_curve <- roc(validation_data$SURVIVAL_FLAG, validation_probabilities)
+  auc <- auc(roc_curve)
+  
+  cat("AUC for current configuration:", auc, "\n")
+  
+  if (auc > best_auc) {
+    best_model <- model
+    best_auc <- auc
+  }
+}
 
-# Extract OOB error
-oob_error <- random_forest_model$err.rate[, 1]
+cat("Best AUC:", best_auc, "\n")
 
-# Find the minimum OOB error and its corresponding number of trees
-min_oob_error <- min(oob_error)
-optimal_trees <- which(oob_error == min_oob_error)[1]
+# Metrics
+probabilities <- predict(best_model, validation_data, type = "prob")[, 2]
+predictions <- predict(best_model, validation_data, type = "class")
 
-# Plot OOB error with colorized line and gridlines
-plot(
-  oob_error,
-  type = "l",
-  col = "blue",
-  lwd = 2,
-  main = "OOB Error Rate",
-  xlab = "Number of Trees",
-  ylab = "OOB Error",
-  cex.main = 1.2, # Increase title size
-  cex.lab = 1.1   # Increase axis label size
-)
-
-# Add gridlines for better visualization
-grid(col = "gray", lty = "dotted")
-
-# Highlight the minimum OOB error with a red point
-points(optimal_trees, min_oob_error, col = "red", pch = 19, cex = 1.5)
-
-# Annotate the minimum OOB error point
-text(
-  optimal_trees, min_oob_error,
-  labels = paste0("Min OOB: ", round(min_oob_error, 4), "\nTrees: ", optimal_trees),
-  pos = 4, col = "red", cex = 0.9
-)
-
-# Annotate the start and end points of the curve for better understanding
-text(1, oob_error[1], labels = paste0("Start: ", round(oob_error[1], 4)), pos = 4, col = "darkgreen", cex = 0.9)
-text(length(oob_error), oob_error[length(oob_error)], labels = paste0("End: ", round(oob_error[length(oob_error)], 4)), pos = 4, col = "darkgreen", cex = 0.9)
-
-# Add a legend for clarity
-legend(
-  "topright",
-  legend = c("OOB Error", "Min OOB Error"),
-  col = c("blue", "red"),
-  lwd = 2,
-  pch = c(NA, 19),
-  cex = 0.9,
-  bty = "n" # No box around legend
-)
-
-# Output the results to the console
-cat("Lowest OOB Error:", round(min_oob_error, 4), "\n")
-cat("Optimal Number of Trees:", optimal_trees, "\n")
-
+# Call the function with predictions and probabilities
+print_metrics(best_model, validation_data, probabilities, predictions)
 ```
 
 ## 2.3. XGBoost Model
-
 ```{r XGBoost Model}
-# Split the data into training and testing sets (80-20 split)
-train_index <- createDataPartition(death_status_choosen_predictors$SURVIVAL_FLAG, p = 0.8, list = FALSE)
-train_data <- death_status_choosen_predictors[train_index, ]
-test_data <- death_status_choosen_predictors[-train_index, ]
-
-# Check the original class distribution
-cat("Original class distribution:\n")
-print(table(train_data$SURVIVAL_FLAG))
-
-# Visualize class distribution before balancing
-ggplot(data.frame(SURVIVAL_FLAG = train_data$SURVIVAL_FLAG), aes(x = as.factor(SURVIVAL_FLAG))) +
-  geom_bar(fill = "steelblue") +
-  labs(title = "Class Distribution Before Balancing", x = "Survival Flag", y = "Count") +
-  theme_minimal()
-
-# Apply undersampling to balance the dataset
-desired_majority_class <- sum(train_data$SURVIVAL_FLAG == 1) # Match majority size to minority size
-total_size <- 2 * desired_majority_class
-
-train_data_balanced <- ovun.sample(
-  SURVIVAL_FLAG ~ ., 
-  data = train_data, 
-  method = "under", 
-  N = total_size, 
-  seed = 123
-)$data
-
-# Check the class distribution after balancing
-cat("Balanced class distribution:\n")
-print(table(train_data_balanced$SURVIVAL_FLAG))
-
-# Visualize class distribution after balancing
-ggplot(data.frame(SURVIVAL_FLAG = train_data_balanced$SURVIVAL_FLAG), aes(x = as.factor(SURVIVAL_FLAG))) +
-  geom_bar(fill = "darkorange") +
-  labs(title = "Class Distribution After Balancing", x = "Survival Flag", y = "Count") +
-  theme_minimal()
-
-# Exclude the target variable from predictors
-predictor_columns <- setdiff(names(train_data_balanced), "SURVIVAL_FLAG")
+# Prepare predictor columns
+predictor_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
 
 # Ensure the data is properly formatted for XGBoost
-dummies <- dummyVars(~ ., data = train_data_balanced[, predictor_columns])
-train_matrix <- predict(dummies, newdata = train_data_balanced[, predictor_columns])
+dummies <- dummyVars(~ ., data = train_data[, predictor_columns])
+train_matrix <- predict(dummies, newdata = train_data[, predictor_columns])
+validation_matrix <- predict(dummies, newdata = validation_data[, predictor_columns])
 test_matrix <- predict(dummies, newdata = test_data[, predictor_columns])
 
 # Convert to xgb.DMatrix
-train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data_balanced$SURVIVAL_FLAG) - 1)
+train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data$SURVIVAL_FLAG) - 1)
+val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(validation_data$SURVIVAL_FLAG) - 1)
 test_xgb <- xgb.DMatrix(data = as.matrix(test_matrix), label = as.numeric(test_data$SURVIVAL_FLAG) - 1)
 
-# Set XGBoost parameters
-xgb_params <- list(
-  objective = "binary:logistic",
-  eval_metric = "auc",
-  max_depth = 6,
-  eta = 0.1,
-  gamma = 1,
-  subsample = 0.8,
-  colsample_bytree = 0.8
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Define a grid of hyperparameters
+param_grid <- expand.grid(
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.3),
+  gamma = c(0, 1, 5),
+  subsample = c(0.7, 0.8, 1.0),
+  colsample_bytree = c(0.6, 0.8, 1.0)
 )
 
-# Train the XGBoost model
-set.seed(123)
-xgb_model <- xgb.train(
-  params = xgb_params,
-  data = train_xgb,
+# Initialize a results data frame
+tuning_results <- data.frame()
+
+for (i in 1:nrow(param_grid)) {
+  # Extract parameters for this iteration
+  params <- param_grid[i, ]
+  
+  xgb_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    subsample = params$subsample,
+    colsample_bytree = params$colsample_bytree
+  )
+  
+  # Train the model with validation monitoring
+  set.seed(123)
+  model <- xgb.train(
+    params = xgb_params,
+    data = train_xgb,
+    nrounds = 100,
+    watchlist = list(train = train_xgb, validation = val_xgb),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Evaluate performance on validation data
+  val_predictions <- predict(model, val_xgb)
+  auc <- auc(roc(validation_data$SURVIVAL_FLAG, val_predictions))
+  
+  # Store the results
+  tuning_results <- rbind(
+    tuning_results,
+    cbind(params, AUC = auc)
+  )
+}
+
+# Find the best parameters
+best_params <- tuning_results[which.max(tuning_results$AUC), ]
+cat("Best Parameters:\n")
+print(best_params)
+
+# ------------------------------------------------------------------------
+# TRAIN FINAL MODEL WITH BEST PARAMETERS
+# ------------------------------------------------------------------------
+
+
+# Train the model on the training set
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = best_params$max_depth,
+  eta = best_params$eta,
+  gamma = best_params$gamma,
+  subsample = best_params$subsample,
+  colsample_bytree = best_params$colsample_bytree
+)
+
+final_xgb_model <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb,     # Only training data
   nrounds = 100,
-  watchlist = list(train = train_xgb, test = test_xgb),
+  watchlist = list(train = train_xgb, validation = val_xgb),
   early_stopping_rounds = 10,
   verbose = 1
 )
 
-# Make predictions on the test set
-xgb_predictions <- predict(xgb_model, test_xgb)
-xgb_class <- ifelse(xgb_predictions > 0.5, 1, 0)
+# Evaluate the model on the validation set
+val_predictions <- predict(final_xgb_model, val_xgb)
+val_class <- ifelse(val_predictions > 0.5, 1, 0)
 
-# Evaluate the model
-conf_matrix_xgb <- confusionMatrix(as.factor(xgb_class), as.factor(test_data$SURVIVAL_FLAG))
-cat("Confusion Matrix:\n")
-print(conf_matrix_xgb)
+# Ensure validation data target is a factor
+validation_data$SURVIVAL_FLAG <- as.factor(validation_data$SURVIVAL_FLAG)
+val_class <- factor(val_class, levels = levels(validation_data$SURVIVAL_FLAG))
 
-# Calculate and plot the ROC curve
-roc_curve_xgb <- roc(test_data$SURVIVAL_FLAG, xgb_predictions)
-plot(
-  roc_curve_xgb,
-  col = "darkorange",
-  lwd = 2,
-  main = "ROC Curve for XGBoost",
-  print.auc = TRUE
+# Evaluate performance on validation set
+print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
+
+```
+
+```{r XGBoost Model balanced}
+# Apply undersampling to balance the training dataset
+library(ROSE)
+train_data_balanced <- ovun.sample(
+  SURVIVAL_FLAG ~ ., 
+  data = train_data, 
+  method = "under",
+  seed = 123
+)$data
+
+cat("Balanced Class Distribution:\n")
+print(table(train_data_balanced$SURVIVAL_FLAG))
+
+# ------------------------------------------------------------------------
+# FORMAT DATA FOR XGBOOST
+# ------------------------------------------------------------------------
+
+# Prepare predictor columns
+predictor_columns <- setdiff(names(train_data_balanced), "SURVIVAL_FLAG")
+
+# Create dummy variables for categorical predictors
+dummies <- dummyVars(~ ., data = train_data_balanced[, predictor_columns])
+train_matrix <- predict(dummies, newdata = train_data_balanced[, predictor_columns])
+validation_matrix <- predict(dummies, newdata = validation_data[, predictor_columns])
+test_matrix <- predict(dummies, newdata = test_data[, predictor_columns])
+
+# Convert to xgb.DMatrix
+train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data_balanced$SURVIVAL_FLAG) - 1)
+val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(validation_data$SURVIVAL_FLAG) - 1)
+test_xgb <- xgb.DMatrix(data = as.matrix(test_matrix), label = as.numeric(test_data$SURVIVAL_FLAG) - 1)
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Define a grid of hyperparameters
+param_grid <- expand.grid(
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.3),
+  gamma = c(0, 1, 5),
+  subsample = c(0.7, 0.8, 1.0),
+  colsample_bytree = c(0.6, 0.8, 1.0)
 )
 
-# Feature Importance Visualization
-importance <- xgb.importance(model = xgb_model)
-xgb.plot.importance(importance_matrix = importance)
+# Initialize a results data frame
+tuning_results <- data.frame()
 
-# Calibration Plot
-calibration_data <- data.frame(
-  Predicted_Prob = xgb_predictions,
-  Actual = test_data$SURVIVAL_FLAG
-)
-
-calibration_data <- calibration_data %>%
-  mutate(Binned_Prob = cut(Predicted_Prob, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE))
-
-calibration_summary <- calibration_data %>%
-  group_by(Binned_Prob) %>%
-  summarise(
-    Mean_Predicted = mean(Predicted_Prob),
-    Mean_Actual = mean(as.numeric(Actual) - 1)
+for (i in 1:nrow(param_grid)) {
+  params <- param_grid[i, ]
+  
+  xgb_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    subsample = params$subsample,
+    colsample_bytree = params$colsample_bytree
   )
+  
+  # Train the model with validation monitoring
+  model <- xgb.train(
+    params = xgb_params,
+    data = train_xgb,
+    nrounds = 100,
+    watchlist = list(train = train_xgb, validation = val_xgb),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Evaluate performance on validation data
+  val_predictions <- predict(model, val_xgb)
+  auc_score <- auc(roc(validation_data$SURVIVAL_FLAG, val_predictions))
+  
+  # Store the results
+  tuning_results <- rbind(
+    tuning_results,
+    cbind(params, AUC = auc_score)
+  )
+}
 
-ggplot(calibration_summary, aes(x = Mean_Predicted, y = Mean_Actual)) +
-  geom_point(color = "red") +
-  geom_line(color = "blue") +
-  labs(title = "Calibration Plot", x = "Mean Predicted Probability", y = "Actual Probability") +
-  theme_minimal()
+# Find the best parameters
+best_params <- tuning_results[which.max(tuning_results$AUC), ]
+cat("Best Parameters:\n")
+print(best_params)
 
-# Output results
-cat("AUC:", auc(roc_curve_xgb), "\n")
+# ------------------------------------------------------------------------
+# TRAIN FINAL MODEL WITH BEST PARAMETERS
+# ------------------------------------------------------------------------
+
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = best_params$max_depth,
+  eta = best_params$eta,
+  gamma = best_params$gamma,
+  subsample = best_params$subsample,
+  colsample_bytree = best_params$colsample_bytree
+)
+
+final_xgb_model <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb,
+  nrounds = 100,
+  watchlist = list(train = train_xgb, validation = val_xgb),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# ------------------------------------------------------------------------
+# VALIDATION AND PERFORMANCE METRICS
+# ------------------------------------------------------------------------
+
+val_predictions <- predict(final_xgb_model, val_xgb)
+val_class <- ifelse(val_predictions > 0.5, 1, 0)
+
+# Ensure validation data target is a factor
+val_class <- factor(val_class, levels = levels(validation_data$SURVIVAL_FLAG))
+
+# Evaluate performance on validation set
+print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
+```
+
+# 2.4. Evaluation on Test data
+```{r Evaluation on Test data}
+# Make predictions on the test set
+test_predictions <- predict(best_model, test_data, type = "class")
+test_probabilities <- predict(best_model, test_data, type = "prob")[, 2]
+
+# Call the function with predictions and probabilities
+print_metrics(best_model, test_data, test_probabilities, test_predictions)
+
 ```
