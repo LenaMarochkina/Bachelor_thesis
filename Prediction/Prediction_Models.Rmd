@@ -1,12 +1,17 @@
 ---
-title: "Predictive Models"
+title: "Predictive Models - Death Status"
 author: "Elena Marochkina"
 date: "`r Sys.Date()`"
 output: 
+  pdf_document: 
+    latex_engine: xelatex
   html_document:
     df_print: paged
     toc: yes
     toc_depth: 6
+editor_options: 
+  markdown: 
+    wrap: sentence
 ---
 
 ```{r setup, include=FALSE}
@@ -29,7 +34,8 @@ library(performanceEstimation)
 library(xgboost)
 library(ROSE)
 library(MLmetrics)
-    
+library(smotefamily)
+library(SHAPforxgboost)
 ```
 
 ```{r Metrics function}
@@ -82,18 +88,27 @@ death_status <- death_status %>%
   select(-SUBJECT_ID_COMPOSE, -SUBJECT_ID, -BG_LAST_VENTILATOR)
 ```
 
+```{r log transformation and scaling}
+# Log-transform and scale the data
+death_status <- death_status %>%
+  mutate(across(
+    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
+    ~ (log(. + 1))
+  ))
+
+```
+
 ```{r missing values}
 death_status <- death_status %>%
   mutate(across(
     where(is.numeric), 
     ~ round(ifelse(is.na(.), mean(., na.rm = TRUE), .), 2)
-  ))
+  )) %>%
+  mutate(across(where(is.numeric), 
+                ~ ifelse(is.infinite(.), mean(.[!is.infinite(.)], na.rm = TRUE), .)))
 ```
 
-# 2. Death Status
-## 2.1. Desicion Tree Model
-
-```{r Decision Tree Model unbalanced}
+```{r split data}
 # Set seed for reproducibility
 set.seed(12)
 
@@ -105,6 +120,15 @@ test_data <- death_status[-train_val_index, ]
 train_index <- createDataPartition(train_val_data$SURVIVAL_FLAG, p = 0.75, list = FALSE)
 train_data <- train_val_data[train_index, ]
 validation_data <- train_val_data[-train_index, ]
+```
+
+# 2. Death Status
+
+## 2.1. Desicion Tree Model
+
+```{r Decision Tree Model unbalanced}
+# Set seed for reproducibility
+set.seed(12)
 
 # Train the Decision Tree with tuned parameters
 decision_tree_tuned_unbalanced <- rpart(
@@ -125,6 +149,24 @@ predictions_unbalanced <- predict(decision_tree_tuned_unbalanced, validation_dat
 print_metrics(decision_tree_tuned_unbalanced, validation_data, probabilities_unbalanced[, 2], predictions_unbalanced)
 
 ```
+
+The Decision Tree model shows high sensitivity (**0.995**) but very low specificity (**0.084**), indicating that it correctly identifies almost all positive cases (case = 1) but struggles to distinguish negative cases (control = 0).
+
+High Sensitivity (Recall: 0.995) → The model captures nearly all actual positive cases.
+
+Low Specificity (0.084) → Many negative cases are incorrectly classified as positives (high false positive rate).
+
+Moderate Precision (0.898) → While the model detects positive cases well, it misclassifies many negative cases as positives.
+
+Accuracy (0.895) → The overall classification performance appears strong, but this is misleading due to the imbalance in specificity.
+
+AUC (0.642) → The model has weak overall discrimination ability, indicating it does not effectively separate cases from controls.
+
+**Key Takeaways**
+
+The model is biased toward predicting positive cases and fails to correctly classify negatives.
+The low specificity suggests that false positives are a significant issue, making this model unreliable in situations where false alarms are costly.
+The AUC score of 0.642 confirms that the model lacks strong discriminative power between classes.
 
 ```{r Decision Tree Model undersampling}
 
@@ -165,8 +207,25 @@ print_metrics(decision_tree_UND, validation_data, probabilities_UND[, 2], predic
 
 ```
 
+After applying undersampling to balance the dataset, the Decision Tree model's performance is as follows:
+
+**Accuracy:** 0.713 The model achieved a moderate accuracy of 71.3%.
+This reflects a balanced trade-off between correctly predicting both classes.
+
+**Sensitivity (Recall):** 0.711 Sensitivity remains relatively high at 71.1%, meaning the model is still fairly good at identifying positive cases (case = 1), but there is room for improvement.
+
+**Specificity:** 0.724 Specificity increased to 72.4%, indicating the model's improved ability to correctly identify negative cases (control = 0) after undersampling.
+
+**Precision:** 0.954 The model achieved high precision (95.4%), meaning when it predicts a positive case, it's more likely to be correct, with very few false positives.
+
+**F1-score:** 0.815 The F1-score of 81.5% reflects a good balance between recall and precision, indicating that the model performs well in predicting both positive and negative cases.
+
+**AUC:** 0.729 The AUC of 0.73 suggests moderate discriminatory power between the classes, meaning the model is better than random guessing but could be further optimized.
 
 ## 2.2. Random Forest Model
+
+### 2.2.1. Random Forest unbalanced
+
 ```{r Random Forest Model simple}
 # ------------------------------------------------------------------------
 # HYPERPARAMETER TUNING
@@ -218,6 +277,22 @@ print_metrics(best_model, validation_data, probabilities, predictions)
 
 ```
 
+**Key Observations:**
+
+-   **Accuracy (89.7%)** appears high but is misleading due to class imbalance.
+
+-   **Sensitivity (99.8%)** means nearly all positive cases (probably deaths) are detected.
+
+-   **Specificity (7.9%)** is **extremely low**, meaning the model struggles to identify negative cases (likely survivors).
+
+-   **Precision (89.8%)** shows a reasonable positive predictive value.
+
+-   **F1-score (94.5%)** is good, but with the imbalance, it might not be the best metric to judge performance.
+
+-   **AUC (0.87)** suggests decent overall discriminatory ability but does not fix class imbalance issues.
+
+### 2.2.2. Random Forest balanced (undersampling)
+
 ```{r Random Forest Model balanced}
 # Apply undersampling to balance the training dataset
 desired_majority_class_RF_UND <- sum(train_data$SURVIVAL_FLAG == 1) # Match majority size to minority size
@@ -249,6 +324,7 @@ tune_grid <- expand.grid(
 # Tune the model using validation set
 best_model <- NULL
 best_auc <- 0
+best_hyperparams_RF_UND <- list()
 
 for (i in 1:nrow(tune_grid)) {
   cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
@@ -271,10 +347,18 @@ for (i in 1:nrow(tune_grid)) {
   if (auc > best_auc) {
     best_model <- model
     best_auc <- auc
+    
+    # Save best hyperparameters
+    best_hyperparams_RF_UND <- list(
+      ntree = tune_grid[i, "ntree"],
+      mtry = tune_grid[i, "mtry"],
+      maxnodes = tune_grid[i, "maxnodes"])
   }
 }
 
 cat("Best AUC:", best_auc, "\n")
+cat("Best Hyperparameters:\n")
+print(best_hyperparams_RF_UND)
 
 # Metrics
 probabilities <- predict(best_model, validation_data, type = "prob")[, 2]
@@ -282,13 +366,410 @@ predictions <- predict(best_model, validation_data, type = "class")
 
 # Call the function with predictions and probabilities
 print_metrics(best_model, validation_data, probabilities, predictions)
+
 ```
+
+**Comparison of Balanced and Unbalanced Random Forest Survival (RFS) Models**
+
+To address class imbalance, a **Balanced RFS model (undersampling)** was tested against the **Unbalanced RFS model**.
+
+**Key Observations:**
+
+\| Metric \| Unbalanced RFS \| Balanced RFS \| \|------------\|---------------\|--------------\| \| **Accuracy** \| 89.7% \| 80.4% \| \| **Sensitivity** \| 99.8% \| 80.8% \| \| **Specificity** \| **7.9%** \| **77.5%** \| \| **Precision** \| 89.8% \| 96.7% \| \| **F1-score** \| 94.5% \| 88.0% \| \| **AUC** \| 87.0% \| 87.8% \|
+
+**Key Takeaways:** - **Unbalanced RFS** inflates sensitivity (99.8%) but has extremely low specificity (7.9%), misclassifying many survivors.\
+- **Balanced RFS** **greatly improves specificity (77.5%)**, making it better at identifying survivors while maintaining strong sensitivity (80.8%).\
+- **Higher precision (96.7%)** in the balanced model ensures fewer false positives.\
+- **AUC remains similar (\~87%),** indicating that balancing improves reliability without loss of predictive power.
+
+**Conclusion:** The **Balanced RFS model** offers a **better trade-off between sensitivity and specificity**, making it a **more practical choice for clinical prediction**.
+
+#### 2.2.2.1. Feature Selection
+
+Try feature selection to improve the model.
+
+```{r feature graph}
+# ------------------------------------------------------------------------
+# EXTRACT FEATURE IMPORTANCE
+# ------------------------------------------------------------------------
+
+# Extract feature importance from the best Random Forest model
+importance_matrix_RF_UND <- importance(best_model)
+
+# Convert to a data frame
+importance_df <- data.frame(
+  Feature = rownames(importance_matrix_RF_UND),
+  Importance = importance_matrix_RF_UND[, "MeanDecreaseGini"]
+)
+
+# Separate positive and negative importance values
+positive_importance_df <- importance_df[importance_df$Importance > 10, ]
+negative_importance_df <- importance_df[importance_df$Importance < 0.5, ]
+
+# Sort each in descending order
+positive_importance_df <- positive_importance_df[order(positive_importance_df$Importance, decreasing = TRUE), ]
+negative_importance_df <- negative_importance_df[order(negative_importance_df$Importance), ]
+
+# ------------------------------------------------------------------------
+# PLOT POSITIVE VIMP FEATURES
+# ------------------------------------------------------------------------
+positive_plot <- ggplot(positive_importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  coord_flip() +
+  labs(title = "Feature Importance (VIMP) - Positive Features",
+       x = "Features",
+       y = "Mean Decrease Gini") +
+  theme_minimal()
+
+# ------------------------------------------------------------------------
+# PLOT NEGATIVE VIMP FEATURES
+# ------------------------------------------------------------------------
+negative_plot <- ggplot(negative_importance_df, aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "red") +
+  coord_flip() +
+  labs(title = "Feature Importance (VIMP) - Negative Features",
+       x = "Features",
+       y = "Mean Decrease Gini") +
+  theme_minimal()
+
+# ------------------------------------------------------------------------
+# DISPLAY BOTH PLOTS
+# ------------------------------------------------------------------------
+print(positive_plot)
+print(negative_plot)
+
+
+```
+
+```{r feature selection}
+# ------------------------------------------------------------------------
+# FEATURE SELECTION BASED ON IMPORTANCE SCORES
+# ------------------------------------------------------------------------
+
+# Ensure 'MeanDecreaseGini' column is available
+if ("MeanDecreaseGini" %in% colnames(importance_matrix_RF_UND)) {
+  importance_scores <- importance_matrix_RF_UND[, "MeanDecreaseGini"]
+} else {
+  stop("Error: 'MeanDecreaseGini' column not found in feature importance matrix")
+}
+
+# Print sorted importance values
+print(sort(importance_scores, decreasing = TRUE))
+
+# Select top 30% features based on importance scores
+percentile_cutoff <- quantile(importance_scores, 0.5)  
+selected_features_RF_UND <- names(importance_scores[importance_scores >= percentile_cutoff])
+
+# If no features meet the threshold, select the top 10 most important ones
+if (length(selected_features_RF_UND) == 0) {
+  selected_features_RF_UND <- names(sort(importance_scores, decreasing = TRUE)[1:10])
+  print("No features met the threshold. Selecting top 10 instead.")
+}
+
+print("Final Selected Features:")
+print(selected_features_RF_UND)
+
+# Transform training and validation datasets using selected features
+train_data_VIMP <- train_data[, c(selected_features_RF_UND, "SURVIVAL_FLAG")]
+validation_data_VIMP <- validation_data[, c(selected_features_RF_UND, "SURVIVAL_FLAG")]
+
+# ------------------------------------------------------------------------
+# APPLY UNDERSAMPLING TO BALANCE TRAINING DATA AFTER FEATURE SELECTION
+# ------------------------------------------------------------------------
+
+# Define the number of minority class cases (SURVIVAL_FLAG = 1)
+desired_minority_count <- sum(train_data_VIMP$SURVIVAL_FLAG == 1)
+
+# Set the total number of samples (equal minority and majority class size)
+total_size <- 2 * desired_minority_count
+
+# Perform undersampling
+train_data_balanced_VIMP <- ovun.sample(
+  SURVIVAL_FLAG ~ ., 
+  data = train_data_VIMP, 
+  method = "under", 
+  N = total_size, 
+  seed = 123
+)$data
+
+# Ensure SURVIVAL_FLAG is a factor with correct levels
+train_data_balanced_VIMP$SURVIVAL_FLAG <- factor(train_data_balanced_VIMP$SURVIVAL_FLAG)
+
+# Print the balanced class distribution
+cat("Balanced Training Class Distribution:\n")
+print(table(train_data_balanced_VIMP$SURVIVAL_FLAG))
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING FOR BALANCED RANDOM FOREST
+# ------------------------------------------------------------------------
+
+# Define tuning grid
+tune_grid <- expand.grid(
+  mtry = c(5, 10, 15),   # Number of variables randomly sampled at each split
+  ntree = c(100, 300, 500),  # Number of trees
+  maxnodes = c(10, 30, 50)  # Maximum nodes per tree
+)
+
+best_model <- NULL
+best_auc <- 0
+best_hyperparams_RF_UND <- list()
+
+# Tune model using validation set
+for (i in 1:nrow(tune_grid)) {
+  cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
+  
+  model <- randomForest(
+    SURVIVAL_FLAG ~ ., 
+    data = train_data_balanced_VIMP, 
+    ntree = tune_grid[i, "ntree"], 
+    mtry = tune_grid[i, "mtry"], 
+    maxnodes = tune_grid[i, "maxnodes"],
+    importance = TRUE
+  )
+  
+  # Evaluate performance on validation set
+  validation_probabilities <- predict(model, validation_data_VIMP, type = "prob")[, 2]
+  roc_curve <- roc(validation_data_VIMP$SURVIVAL_FLAG, validation_probabilities)
+  auc <- auc(roc_curve)
+  
+  cat("AUC for current configuration:", auc, "\n")
+  
+  # Track best model
+  if (auc > best_auc) {
+    best_model <- model
+    best_auc <- auc
+    best_hyperparams_RF_UND <- list(
+      ntree = tune_grid[i, "ntree"],
+      mtry = tune_grid[i, "mtry"],
+      maxnodes = tune_grid[i, "maxnodes"]
+    )
+  }
+}
+
+cat("Best AUC:", best_auc, "\n")
+cat("Best Hyperparameters:\n")
+print(best_hyperparams_RF_UND)
+
+# ------------------------------------------------------------------------
+# FINAL MODEL METRICS
+# ------------------------------------------------------------------------
+
+# Make predictions
+probabilities <- predict(best_model, validation_data_VIMP, type = "prob")[, 2]
+predictions <- predict(best_model, validation_data_VIMP, type = "class")
+
+# Evaluate and print performance metrics
+print_metrics(best_model, validation_data_VIMP, probabilities, predictions)
+
+
+
+```
+
+
+**Key Observations:**
+
+| Metric                     | Value  | Explanation                                                                                                            |
+|----------------|----------------|---------------------------------------|
+| **Accuracy**               | 80.32% | The model correctly classifies 80.4% of all cases, showing overall strong performance.                                 |
+| **Sensitivity (Recall)**   | 80.76% | The model successfully detects 80.8% of true positive cases (e.g., mortality cases).                                   |
+| **Specificity**            | 76.70% | 76.7% of true negative cases (e.g., survivors) are correctly identified, showing improved balance.                     |
+| **Precision**              | 96.55% | When the model predicts a positive case, 96.6% of those predictions are correct, minimizing false positives.           |
+| **F1-score**               | 87.95%  | The balance between Precision and Recall is strong, making the model reliable for classification.                      |
+| **AUC (Area Under Curve)** | 87.61% | The model has high discriminatory ability, meaning it effectively differentiates between high-risk and low-risk cases. |
+
+**Key Takeaways:**\
+- The model achieves **strong overall accuracy (80.32%)**, correctly classifying most cases.\
+- **High sensitivity (80.76%)** ensures effective detection of mortality cases.\
+- **Good specificity (76.7%)** indicates that survivors are identified more accurately.\
+- **Excellent precision (96.55%)** reduces false positives, making predictions highly reliable.\
+- **Balanced F1-score (87.95%)** confirms that both precision and recall are well-optimized.\
+- **AUC of 87.6%** suggests that the model effectively differentiates between high-risk and low-risk cases.
+
+#### 2.2.2.2. PCA
+
+```{r Random Forest Model undersampling PCA}
+# Select numeric features only (excluding SURVIVAL_FLAG)
+feature_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
+
+# Standardize the data
+preProcess_params <- preProcess(train_data[, feature_columns], method = c("center", "scale"))
+train_scaled <- predict(preProcess_params, train_data[, feature_columns])
+validation_scaled <- predict(preProcess_params, validation_data[, feature_columns])
+
+# Convert back to data frame and retain SURVIVAL_FLAG
+train_scaled <- data.frame(train_scaled, SURVIVAL_FLAG = train_data$SURVIVAL_FLAG)
+validation_scaled <- data.frame(validation_scaled, SURVIVAL_FLAG = validation_data$SURVIVAL_FLAG)
+
+# Identify near-zero variance (NZV) features
+nzv <- nearZeroVar(train_scaled, saveMetrics = TRUE)
+nzv_features <- rownames(nzv[nzv$zeroVar, ])  # Get feature names with zero variance
+
+# Remove NZV features from both training and validation sets
+train_scaled <- train_scaled[, !(names(train_scaled) %in% nzv_features)]
+validation_scaled <- validation_scaled[, !(names(validation_scaled) %in% nzv_features)]
+
+# Ensure only numeric features remain
+train_scaled_numeric <- train_scaled[, sapply(train_scaled, is.numeric)]
+validation_scaled_numeric <- validation_scaled[, sapply(validation_scaled, is.numeric)]
+nzv <- nearZeroVar(train_scaled, saveMetrics = TRUE)
+print(nzv)
+cat("NZV Features Removed:", sum(nzv$zeroVar), "\n")
+
+# Perform PCA
+pca_model <- prcomp(train_scaled_numeric, center = TRUE, scale. = TRUE)
+
+# Check cumulative variance explained by components
+explained_variance <- summary(pca_model)$importance[3, ]
+
+# Select number of PCs to retain (e.g., 95% variance threshold)
+num_PCs <- min(which(explained_variance >= 0.95))
+
+cat("Number of principal components selected:", num_PCs, "\n")
+
+# Create new PCA-transformed training and validation sets
+train_PCA <- as.data.frame(pca_model$x[, 1:num_PCs])
+validation_PCA <- as.data.frame(predict(pca_model, validation_scaled[, -which(names(validation_scaled) == "SURVIVAL_FLAG")])[, 1:num_PCs])
+
+# Add SURVIVAL_FLAG back to the dataset
+train_PCA$SURVIVAL_FLAG <- train_scaled$SURVIVAL_FLAG
+validation_PCA$SURVIVAL_FLAG <- validation_scaled$SURVIVAL_FLAG
+
+# Define majority class count (match minority size)
+desired_minority_class_RF_PCA <- sum(train_PCA$SURVIVAL_FLAG == 1)
+total_size <- 2 * desired_minority_class_RF_PCA
+
+# Perform undersampling
+train_data_balanced_RF_PCA <- ovun.sample(
+  SURVIVAL_FLAG ~ ., 
+  data = train_PCA, 
+  method = "under", 
+  N = total_size, 
+  seed = 123
+)$data
+
+# Check balanced class distribution
+cat("Balanced Training Class Distribution:\n")
+print(table(train_data_balanced_RF_PCA$SURVIVAL_FLAG))
+
+# Set up hyperparameter tuning grid
+tune_grid <- expand.grid(
+  mtry = c(5, 10, 15, 20, 30),   
+  ntree = c(100, 200, 300, 400, 500), 
+  maxnodes = c(10, 20, 30, 40, 50)  
+)
+
+best_model_PCA <- NULL
+best_auc_PCA <- 0
+best_hyperparams_RF_PCA <- list()
+
+# Tune model using validation set
+for (i in 1:nrow(tune_grid)) {
+  cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
+  
+  model <- randomForest(
+    SURVIVAL_FLAG ~ ., 
+    data = train_data_balanced_RF_PCA, 
+    ntree = tune_grid[i, "ntree"], 
+    mtry = tune_grid[i, "mtry"], 
+    maxnodes = tune_grid[i, "maxnodes"],
+    importance = TRUE
+  )
+  
+  # Evaluate on validation set
+  validation_probabilities <- predict(model, validation_PCA, type = "prob")[, 2]
+  roc_curve <- roc(validation_PCA$SURVIVAL_FLAG, validation_probabilities)
+  auc <- auc(roc_curve)
+  
+  cat("AUC for current configuration:", auc, "\n")
+  
+  if (auc > best_auc_PCA) {
+    best_model_PCA <- model
+    best_auc_PCA <- auc
+    best_hyperparams_RF_PCA <- list(
+      ntree = tune_grid[i, "ntree"],
+      mtry = tune_grid[i, "mtry"],
+      maxnodes = tune_grid[i, "maxnodes"]
+    )
+  }
+}
+
+cat("Best AUC with PCA:", best_auc_PCA, "\n")
+cat("Best Hyperparameters with PCA:\n")
+print(best_hyperparams_RF_PCA)
+
+# Make predictions
+probabilities_PCA <- predict(best_model_PCA, validation_PCA, type = "prob")[, 2]
+predictions_PCA <- predict(best_model_PCA, validation_PCA, type = "class")
+
+# Evaluate and print performance metrics
+print_metrics(best_model_PCA, validation_PCA, probabilities_PCA, predictions_PCA)
+
+```
+
+**Evaluation of Random Forest Model After PCA**
+
+After applying **Principal Component Analysis (PCA)**, the **Random Forest model** was retrained using the selected principal components.
+The following performance metrics were obtained:
+
+**Key Performance Metrics**
+
+| **Metric**                 | **Value**  | **Interpretation**                                                                                                          |
+|------------------|------------------|------------------------------------|
+| **Accuracy**               | **80.69%** | The model correctly classifies **80.7% of all cases**, indicating strong overall performance.                               |
+| **Sensitivity (Recall)**   | **81.55%** | The model successfully detects **81.5% of true positive cases (e.g., high-risk patients or mortality cases)**.              |
+| **Specificity**            | **73.73%** | **73.7% of true negative cases** (e.g., survivors) are correctly identified, showing balanced detection.                    |
+| **Precision**              | **96.17%** | When the model predicts a positive case, **96.2% of those predictions are correct**, minimizing false positives.            |
+| **F1-score**               | **88.26%** | The F1-score indicates a strong balance between **Precision and Recall**, confirming the reliability of the classification. |
+| **AUC (Area Under Curve)** | **85.92%** | The model has **good discriminatory ability**, meaning it effectively distinguishes between high-risk and low-risk cases.   |
+
+**Performance Analysis**
+
+-   **Improved Sensitivity (81.55%)**:
+    -   The model detects more true positive cases than previous iterations.\
+    -   This is crucial for identifying high-risk patients early.
+-   **Slight Reduction in Specificity (73.73%)**:
+    -   While specificity has slightly decreased, the trade-off results in better detection of positive cases.\
+    -   The model still maintains a reasonable ability to correctly classify negative cases.
+-   **High Precision (96.17%)**:
+    -   A **high precision value** indicates that **false positives are minimized**, making the model highly confident in its positive predictions.
+-   **AUC of 85.92%**:
+    -   AUC remains strong, showing the model maintains **robust classification ability** across different probability thresholds.
+
+**Comparison of PCA-Enhanced Model with Balanced RFS Model**
+
+The table below compares the **PCA-enhanced Random Forest model** against the **Balanced Random Forest Survival (RFS) model** across key performance metrics:
+
+| **Metric**     | **Unbalanced RFS** | **Balanced RFS** | **PCA-Enhanced RFS** |
+|---------------|-------------------|------------------|------------------|
+| **Accuracy**  | 89.7%  | 80.4%  | **80.7%**  |
+| **Sensitivity (Recall)** | 99.8%  | 80.8%  | **81.5%**  |
+| **Specificity** | **7.9%**  | **77.5%**  | **73.7%**  |
+| **Precision** | 89.8%  | 96.7%  | **96.2%**  |
+| **F1-score** | 94.5%  | 88.0%  | **88.3%**  |
+| **AUC**  | 87.0%  | **87.8%**  | **85.9%**  |
+
+ **Key Observations**
+- **Accuracy:** PCA improved model accuracy slightly (**80.4% → 80.7%**), showing better generalization.
+- **Sensitivity:** PCA increased recall (**80.8% → 81.5%**), making the model better at detecting high-risk cases.
+- **Specificity:** PCA slightly reduced specificity (**77.5% → 73.7%**), meaning slightly more false positives.
+- **Precision:** PCA retained high precision (**96.7% → 96.2%**), ensuring the model remains confident in its positive predictions.
+- **F1-score:** Slight improvement (**88.0% → 88.3%**), indicating a more balanced trade-off between precision and recall.
+- **AUC:** PCA slightly decreased AUC (**87.8% → 85.9%**), suggesting a minor reduction in overall discriminatory power.
+
+**Conclusion**
+- The **PCA-enhanced model shows slight improvements in accuracy and sensitivity**, making it **more effective at detecting high-risk cases**.
+- The **Balanced RFS model** had slightly **better specificity and AUC**, making it **better at distinguishing between positive and negative cases**.
+- The **choice between PCA and Balanced RFS** depends on the priority:
+  - If detecting **high-risk cases** is more important → **PCA model is preferred**.
+  - If reducing **false positives and ensuring higher specificity** is more important → **Balanced RFS is preferred**.
+
+### 2.2.3. Random Forest Model weighted
 
 ```{r Random Forest Model weighted}
 # Compute class weights based on training data
 class_counts <- table(train_data$SURVIVAL_FLAG)
 total_samples <- sum(class_counts)
-class_weights <- total_samples / (length(class_counts) * class_counts)
+class_weights <- sqrt(total_samples / (length(class_counts) * class_counts))
 print("Class Weights:")
 print(class_weights)
 
@@ -334,15 +815,223 @@ for (i in 1:nrow(tune_grid)) {
 
 cat("Best AUC:", best_auc, "\n")
 
-# Metrics
+# Get probabilities for the positive class (SURVIVAL_FLAG = 1)
 probabilities <- predict(best_model, validation_data, type = "prob")[, 2]
-predictions <- predict(best_model, validation_data, type = "class")
+
+# Set a custom threshold (e.g., 0.3 or 0.4 to improve sensitivity)
+threshold <- 0.3  # Adjust this value to balance sensitivity & specificity
+
+# Classify based on the custom threshold
+predictions <- ifelse(probabilities > threshold, 1, 0)
+
+# Ensure predictions are a factor with correct levels
+predictions <- factor(predictions, levels = levels(validation_data$SURVIVAL_FLAG))
 
 # Call the function with predictions and probabilities
 print_metrics(best_model, validation_data, probabilities, predictions)
+
 ```
 
+**Key Observations:**
+
+- **Accuracy (31.3%)** is very low, indicating that the model struggles to classify cases correctly overall. However, this might be due to its bias towards predicting the negative class.
+
+- **Sensitivity (22.8%)** is **extremely low**, meaning the model fails to detect most positive cases (likely deaths). This suggests that even with class weighting, the model is still heavily favoring the majority class.
+
+- **Specificity (99.6%)** is **extremely high**, meaning the model is almost perfect at identifying negative cases (likely survivors). However, this comes at the cost of missing too many positive cases.
+
+- **Precision (99.8%)** is **very high**, meaning that when the model does predict a positive case, it is almost always correct. However, given the low sensitivity, this indicates that very few positives are actually predicted.
+
+- **F1-score (37.2%)** is **poor**, suggesting that the balance between precision and recall is weak. The low recall significantly drags down the F1-score.
+
+- **AUC (0.89)** is relatively high, showing that the model still has good discriminatory ability. However, this does not compensate for the extremely low recall, as the model is heavily skewed towards predicting negative cases.
+
+**Conclusion:**
+The **weighted Random Forest model** is overly conservative in predicting the positive class, leading to **very low sensitivity** while maintaining **high specificity and precision**. This suggests that the class weights are **not strong enough** to force the model to detect more positive cases. Adjusting the weight ratio further, lowering the decision threshold, or using oversampling techniques like **SMOTE** could help improve sensitivity
+
+### 2.2.4. Random Forest Model balanced SMOTE
+
+```{r RF SMOTE}
+
+# ------------------------------------------------------------------------
+# REMOVE CATEGORICAL VARIABLES BEFORE SMOTE
+# ------------------------------------------------------------------------
+
+# Identify numeric columns only (excluding the target variable)
+numeric_columns <- sapply(train_data, is.numeric)
+train_data_numeric <- train_data[, numeric_columns]
+
+# Ensure SURVIVAL_FLAG remains in the dataset and is a factor
+train_data_numeric$SURVIVAL_FLAG <- train_data$SURVIVAL_FLAG
+train_data_numeric$SURVIVAL_FLAG <- as.factor(train_data_numeric$SURVIVAL_FLAG)
+
+# Apply SMOTE using smotefamily (now only on numeric features)
+smote_result <- SMOTE(X = train_data_numeric[, -which(names(train_data_numeric) == "SURVIVAL_FLAG")], 
+                      target = train_data_numeric$SURVIVAL_FLAG, 
+                      K = 5, dup_size = 4)
+
+# Extract the new balanced dataset from SMOTE output
+train_data_balanced_RF_SMOTE <- smote_result$data
+train_data_balanced_RF_SMOTE$SURVIVAL_FLAG <- as.factor(train_data_balanced_RF_SMOTE$class)  # Rename target variable
+train_data_balanced_RF_SMOTE$class <- NULL  # Remove redundant class column
+
+# Check class distribution after SMOTE
+cat("Balanced Training Class Distribution (SMOTE Applied):\n")
+print(table(train_data_balanced_RF_SMOTE$SURVIVAL_FLAG))
+
+# ------------------------------------------------------------------------
+# REMOVE CATEGORICAL VARIABLES FROM VALIDATION DATA
+# ------------------------------------------------------------------------
+
+# Select only numeric columns in validation data (excluding categorical features)
+validation_data_numeric <- validation_data[, numeric_columns]
+
+# Ensure SURVIVAL_FLAG remains in validation data
+validation_data_numeric$SURVIVAL_FLAG <- validation_data$SURVIVAL_FLAG
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Set up the grid of hyperparameters for tuning
+tune_grid <- expand.grid(
+  mtry = c(10, 12, 15, 20, 30),   
+  ntree = c(100, 200, 300, 400, 500), # Number of trees
+  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
+)
+
+# Tune the model using validation set
+best_model <- NULL
+best_auc <- 0
+best_hyperparams_RF_SMOTE <- list()
+
+for (i in 1:nrow(tune_grid)) {
+  cat("Testing configuration:", paste(tune_grid[i, ], collapse = ", "), "\n")
+  
+  model <- randomForest(
+    SURVIVAL_FLAG ~ ., 
+    data = train_data_balanced_RF_SMOTE, 
+    ntree = tune_grid[i, "ntree"], 
+    mtry = tune_grid[i, "mtry"], 
+    maxnodes = tune_grid[i, "maxnodes"],
+    importance = TRUE
+  )
+  
+  # Evaluate on validation set
+  validation_probabilities <- predict(model, validation_data_numeric, type = "prob")[, 2]
+  roc_curve <- roc(validation_data_numeric$SURVIVAL_FLAG, validation_probabilities)
+  auc <- auc(roc_curve)
+  
+  cat("AUC for current configuration:", auc, "\n")
+  
+  if (auc > best_auc) {
+    best_model <- model
+    best_auc <- auc
+    
+    # Save best hyperparameters
+    best_hyperparams_RF_SMOTE <- list(
+      ntree = tune_grid[i, "ntree"],
+      mtry = tune_grid[i, "mtry"],
+      maxnodes = tune_grid[i, "maxnodes"])
+  }
+}
+
+cat("Best AUC (SMOTE):", best_auc, "\n")
+cat("Best Hyperparameters (SMOTE):\n")
+print(best_hyperparams_RF_SMOTE)
+
+# ------------------------------------------------------------------------
+# MODEL EVALUATION
+# ------------------------------------------------------------------------
+
+# Generate predictions
+probabilities <- predict(best_model, validation_data_numeric, type = "prob")[, 2]
+
+# Adjust classification threshold (default is 0.5)
+threshold <- 0.3
+
+# Classify based on the new threshold
+predictions <- ifelse(probabilities > threshold, 1, 0)
+
+# Ensure predictions remain a factor
+predictions <- factor(predictions, levels = levels(validation_data_numeric$SURVIVAL_FLAG))
+
+# Evaluate model performance
+print_metrics(best_model, validation_data_numeric, probabilities, predictions)
+
+```
+
+**Key Observations**
+
+- **Accuracy (82.41%)** is strong, indicating that the model correctly classifies most cases. The trade-off between sensitivity and specificity suggests a more balanced classification compared to previous versions.
+
+- **Sensitivity (83.66%)** is high, meaning the model effectively detects positive cases (likely deaths). This suggests that lowering the threshold to **0.3** helped improve recall compared to before.
+
+- **Specificity (72.37%)** has **significantly improved** compared to earlier versions, meaning the model is now better at identifying negative cases (likely survivors). This reduces false positives.
+
+- **Precision (96.07%)** is very high, meaning that when the model predicts a positive case, it is almost always correct. The lower threshold **did not significantly impact precision**, showing strong positive predictive value.
+
+- **F1-score (89.44%)** is excellent, showing a **strong balance between precision and recall**, making the model highly reliable in both detecting high-risk patients and avoiding excessive false alarms.
+
+- **AUC (0.87)** remains **strong**, indicating good overall discriminatory ability between positive and negative cases. The model successfully distinguishes between high and low-risk groups.
+
+### 2.2.5. Comparison
+
+The table below presents the performance metrics for all tested models.
+
+```{r comparison RF}
+# Create a comparison dataframe
+comparison_df <- data.frame(
+  Model_Version = c("Unbalanced", "Undersampling", "Feature Selection + Undersampling",
+                    "PCA + Undersampling", "Weighted", "SMOTE"),
+  Accuracy = c(0.898, 0.804, 0.803, 0.807, 0.313, 0.824),
+  Sensitivity = c(0.998, 0.808, 0.808, 0.815, 0.228, 0.836),
+  Specificity = c(0.079, 0.775, 0.767, 0.737, 0.966, 0.724),
+  Precision = c(0.898, 0.967, 0.877, 0.962, 0.998, 0.96),
+  F1_score = c(0.945, 0.88, 0.88, 0.883, 0.372, 0.894),
+  AUC = c(0.87, 0.877, 0.876, 0.859, 0.89, 0.873)
+)
+
+# Print comparison table
+knitr::kable(comparison_df, caption = "Model Performance Comparison Before and After Feature Selection")
+
+```
+
+**Key Observations**
+
+- **Unbalanced Model**  
+  - Achieves the **highest accuracy (89.8%)** and **near-perfect sensitivity (99.8%)**, but **very low specificity (7.9%)**.  
+  - Overly favors positive cases, making it **unreliable for negative case detection**.
+
+- **Undersampling & Feature Selection Models**  
+  - These models show a **more balanced performance** compared to the unbalanced model.  
+  - **Sensitivity (~80.8%)** and **specificity (~76-77%)** indicate that they handle both classes better.  
+  - However, **PCA + Undersampling** has slightly lower AUC (0.859), meaning it may not be the best.
+
+- **Weighted Model**  
+  - Has **very low accuracy (31.3%)** and **extremely low sensitivity (22.8%)**, meaning it fails to detect positives effectively.  
+  - **High specificity (99.6%)** suggests it **rarely predicts positive cases**, making it a poor option.
+
+- **SMOTE Model (Threshold 0.3 Applied)**  
+  - **Best balance between sensitivity (83.6%) and specificity (72.4%)**.  
+  - **High precision (96.0%)** ensures positive predictions are reliable.  
+  - **F1-score (89.4%) is the best among all models**, showing a **strong balance between recall and precision**.  
+  - **AUC (0.873) remains competitive**, indicating good overall performance.
+
+**Best Model Selection**
+Based on the analysis:
+- **The Unbalanced Model is too biased** towards positives.
+- **Undersampling & Feature Selection models are well-balanced** but could be improved.
+- **The Weighted Model is ineffective** due to its **low sensitivity**.
+- **The SMOTE Model (Threshold = 0.3) is the best choice** because:
+  - **High accuracy (82.4%)**  
+  - **Balanced recall (83.6%) and specificity (72.4%)**  
+  - **Strong precision (96.0%) and F1-score (89.4%)**  
+  - **Maintains a high AUC (0.873), ensuring strong predictive power**
+
 ## 2.3. XGBoost Model
+### 2.3.1. XGBoost unbalanced
+
 ```{r XGBoost Model}
 # Prepare predictor columns
 predictor_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
@@ -351,12 +1040,10 @@ predictor_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
 dummies <- dummyVars(~ ., data = train_data[, predictor_columns])
 train_matrix <- predict(dummies, newdata = train_data[, predictor_columns])
 validation_matrix <- predict(dummies, newdata = validation_data[, predictor_columns])
-test_matrix <- predict(dummies, newdata = test_data[, predictor_columns])
 
 # Convert to xgb.DMatrix
 train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data$SURVIVAL_FLAG) - 1)
 val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(validation_data$SURVIVAL_FLAG) - 1)
-test_xgb <- xgb.DMatrix(data = as.matrix(test_matrix), label = as.numeric(test_data$SURVIVAL_FLAG) - 1)
 
 # ------------------------------------------------------------------------
 # HYPERPARAMETER TUNING
@@ -442,7 +1129,7 @@ final_xgb_model <- xgb.train(
 
 # Evaluate the model on the validation set
 val_predictions <- predict(final_xgb_model, val_xgb)
-val_class <- ifelse(val_predictions > 0.5, 1, 0)
+val_class <- ifelse(val_predictions > 0.2, 1, 0)
 
 # Ensure validation data target is a factor
 validation_data$SURVIVAL_FLAG <- as.factor(validation_data$SURVIVAL_FLAG)
@@ -453,36 +1140,44 @@ print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
 
 ```
 
-```{r XGBoost Model balanced}
-# Apply undersampling to balance the training dataset
-library(ROSE)
-train_data_balanced <- ovun.sample(
-  SURVIVAL_FLAG ~ ., 
-  data = train_data, 
-  method = "under",
-  seed = 123
-)$data
+**Key Observations for Unbalanced XGBoost Model (Threshold = 0.2)**
 
-cat("Balanced Class Distribution:\n")
-print(table(train_data_balanced$SURVIVAL_FLAG))
+- **Accuracy (91.99%)** is **very high**, indicating that the model classifies most cases correctly. This suggests strong overall performance compared to previous models.
+
+- **Sensitivity (94.16%)** is **excellent**, meaning the model is highly effective at detecting positive cases (likely deaths). The **low threshold (0.2)** contributes to this high recall by increasing the number of predicted positives.
+
+- **Specificity (74.38%)** is **significantly higher** than previous models, meaning the model is also better at correctly identifying negative cases (likely survivors). This indicates an improved balance between recall and false positives.
+
+- **Precision (96.74%)** is **very strong**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. This ensures high confidence in positive classifications.
+
+- **F1-score (95.44%)** is **the best among all tested models**, demonstrating a **near-perfect balance between precision and recall**. This suggests that the model is both effective at identifying positives and reliable in its predictions.
+
+- **AUC (0.94)** is **exceptional**, showing that the model has an **excellent ability to distinguish between high-risk and low-risk cases**. The increased AUC suggests superior predictive performance over previous models.
+
+**Conclusion**
+The **unbalanced XGBoost model with a 0.2 threshold** achieves the **highest overall performance** so far, with **strong accuracy, exceptional recall, and high precision**. Unlike previous models, it maintains **both sensitivity and specificity at high levels**, making it a **top-performing option**.
+
+#### 2.3.1.1. XGBoost unbalanced feature selection using SHAP
+
+```{r XGBoost Model unbalanced SHAP}
 
 # ------------------------------------------------------------------------
-# FORMAT DATA FOR XGBOOST
+# PREPARE DATA FOR XGBOOST
 # ------------------------------------------------------------------------
 
-# Prepare predictor columns
-predictor_columns <- setdiff(names(train_data_balanced), "SURVIVAL_FLAG")
+# Define predictor columns
+predictor_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
 
-# Create dummy variables for categorical predictors
-dummies <- dummyVars(~ ., data = train_data_balanced[, predictor_columns])
-train_matrix <- predict(dummies, newdata = train_data_balanced[, predictor_columns])
+# Create dummy variables for categorical features
+dummies <- dummyVars(~ ., data = train_data[, predictor_columns])
+
+# Apply transformation to train, validation, and test sets
+train_matrix <- predict(dummies, newdata = train_data[, predictor_columns])
 validation_matrix <- predict(dummies, newdata = validation_data[, predictor_columns])
-test_matrix <- predict(dummies, newdata = test_data[, predictor_columns])
 
-# Convert to xgb.DMatrix
-train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data_balanced$SURVIVAL_FLAG) - 1)
+# Convert to xgb.DMatrix format
+train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data$SURVIVAL_FLAG) - 1)
 val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(validation_data$SURVIVAL_FLAG) - 1)
-test_xgb <- xgb.DMatrix(data = as.matrix(test_matrix), label = as.numeric(test_data$SURVIVAL_FLAG) - 1)
 
 # ------------------------------------------------------------------------
 # HYPERPARAMETER TUNING
@@ -501,6 +1196,7 @@ param_grid <- expand.grid(
 tuning_results <- data.frame()
 
 for (i in 1:nrow(param_grid)) {
+  # Extract parameters for this iteration
   params <- param_grid[i, ]
   
   xgb_params <- list(
@@ -514,6 +1210,7 @@ for (i in 1:nrow(param_grid)) {
   )
   
   # Train the model with validation monitoring
+  set.seed(123)
   model <- xgb.train(
     params = xgb_params,
     data = train_xgb,
@@ -525,12 +1222,12 @@ for (i in 1:nrow(param_grid)) {
   
   # Evaluate performance on validation data
   val_predictions <- predict(model, val_xgb)
-  auc_score <- auc(roc(validation_data$SURVIVAL_FLAG, val_predictions))
+  auc <- auc(roc(validation_data$SURVIVAL_FLAG, val_predictions))
   
   # Store the results
   tuning_results <- rbind(
     tuning_results,
-    cbind(params, AUC = auc_score)
+    cbind(params, AUC = auc)
   )
 }
 
@@ -543,6 +1240,7 @@ print(best_params)
 # TRAIN FINAL MODEL WITH BEST PARAMETERS
 # ------------------------------------------------------------------------
 
+# Train the final model using the best parameters
 final_xgb_params <- list(
   objective = "binary:logistic",
   eval_metric = "auc",
@@ -555,7 +1253,7 @@ final_xgb_params <- list(
 
 final_xgb_model <- xgb.train(
   params = final_xgb_params,
-  data = train_xgb,
+  data = train_xgb,  # Only training data
   nrounds = 100,
   watchlist = list(train = train_xgb, validation = val_xgb),
   early_stopping_rounds = 10,
@@ -563,26 +1261,870 @@ final_xgb_model <- xgb.train(
 )
 
 # ------------------------------------------------------------------------
-# VALIDATION AND PERFORMANCE METRICS
+# FEATURE SELECTION WITH SHAP
 # ------------------------------------------------------------------------
 
-val_predictions <- predict(final_xgb_model, val_xgb)
-val_class <- ifelse(val_predictions > 0.5, 1, 0)
+# Compute SHAP values
+shap_values <- shap.values(xgb_model = final_xgb_model, X_train = train_xgb)
+
+# Extract mean absolute SHAP values per feature
+shap_importance <- shap_values$mean_shap_score
+
+# Convert to data frame
+shap_df <- data.frame(Feature = names(shap_importance), Importance = shap_importance)
+
+# Sort by importance
+shap_df <- shap_df[order(-shap_df$Importance), ]
+
+# Plot SHAP feature importance
+ggplot(shap_df[1:20, ], aes(x = reorder(Feature, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 20 Most Important Features (SHAP)", x = "Feature", y = "SHAP Importance")
+
+# Select only the most important features (e.g., Top 30)
+top_features <- shap_df$Feature[1:30]
+# Retrieve the corresponding original dataset column names
+encoded_feature_names <- colnames(train_matrix)  # Features after dummy encoding
+
+# Check if selected SHAP features exist in encoded features
+selected_encoded_features <- encoded_feature_names[encoded_feature_names %in% top_features]
+
+# Select only the top SHAP features from the encoded dataset
+train_selected <- as.data.frame(train_matrix)[, selected_encoded_features]
+validation_selected <- as.data.frame(validation_matrix)[, selected_encoded_features]
+
+# Add the target variable back to the selected datasets
+train_selected$SURVIVAL_FLAG <- train_data$SURVIVAL_FLAG
+validation_selected$SURVIVAL_FLAG <- validation_data$SURVIVAL_FLAG
+
+# ------------------------------------------------------------------------
+# RETRAIN MODEL WITH SELECTED FEATURES
+# ------------------------------------------------------------------------
+
+# Create dummy variables for selected features
+dummies_selected <- dummyVars(~ ., data = train_selected[, top_features])
+
+# Apply transformation to selected features
+train_selected_matrix <- predict(dummies_selected, newdata = train_selected[, top_features])
+validation_selected_matrix <- predict(dummies_selected, newdata = validation_selected[, top_features])
+
+# Convert to xgb.DMatrix
+train_xgb_selected <- xgb.DMatrix(data = as.matrix(train_selected_matrix), label = as.numeric(train_selected$SURVIVAL_FLAG) - 1)
+val_xgb_selected <- xgb.DMatrix(data = as.matrix(validation_selected_matrix), label = as.numeric(validation_selected$SURVIVAL_FLAG) - 1)
+
+# Train final model with selected features
+final_xgb_model_selected <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb_selected,
+  nrounds = 100,
+  watchlist = list(train = train_xgb_selected, validation = val_xgb_selected),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# ------------------------------------------------------------------------
+# EVALUATE MODEL PERFORMANCE
+# ------------------------------------------------------------------------
+
+# Generate predictions
+val_predictions_selected <- predict(final_xgb_model_selected, val_xgb_selected)
+
+# Apply classification threshold
+threshold <- 0.2  # Adjust as needed
+val_class_selected <- ifelse(val_predictions_selected > threshold, 1, 0)
 
 # Ensure validation data target is a factor
-val_class <- factor(val_class, levels = levels(validation_data$SURVIVAL_FLAG))
+validation_selected$SURVIVAL_FLAG <- as.factor(validation_selected$SURVIVAL_FLAG)
+val_class_selected <- factor(val_class_selected, levels = levels(validation_selected$SURVIVAL_FLAG))
 
-# Evaluate performance on validation set
-print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
+# Evaluate model performance
+print_metrics(final_xgb_model_selected, validation_selected, val_predictions_selected, val_class_selected)
+
 ```
 
-# 2.4. Evaluation on Test data
+**Key Observations for XGBoost with SHAP Feature Selection (Threshold = 0.2)**
+
+- **Accuracy (90.62%)** remains **very high**, confirming that the model **effectively classifies most cases correctly**. The slight drop from **91.99% (Unbalanced XGBoost)** suggests that dimensionality reduction has helped maintain strong performance.
+
+- **Sensitivity (93.08%)** is **excellent**, meaning the model is still highly effective at detecting positive cases (likely deaths). The slight reduction from **94.16% (Unbalanced XGBoost)** indicates that **some recall has been sacrificed in favor of model efficiency**.
+
+- **Specificity (70.76%)** has **decreased** compared to **74.38% in the Unbalanced XGBoost model**, meaning that the model **misclassifies slightly more negative cases (survivors)** than before. This trade-off might result from removing some less important—but still informative—features.
+
+- **Precision (96.26%)** remains **very high**, showing that when the model predicts a positive case, it is correct the vast majority of the time. The minimal change from **96.74% (Unbalanced XGBoost)** indicates that **feature selection did not significantly impact precision**.
+
+- **F1-score (94.64%)** is still **one of the highest observed**, demonstrating that the model has a **strong balance between recall and precision**. The slight drop from **95.44% (Unbalanced XGBoost)** suggests that **removing features marginally affected model robustness**.
+
+- **AUC (0.931)** is **slightly lower than 0.944 (Unbalanced XGBoost)**, but it remains **exceptional**, showing that the model **still has a strong ability to distinguish between high-risk and low-risk cases**. The trade-off here is **a leaner, more efficient model with almost no loss in predictive power**.
+
+**Conclusion: Trade-off Between Performance and Dimensionality**
+- The **SHAP-based XGBoost model maintains high accuracy, recall, and precision while reducing the number of features**.
+- The model **performs nearly as well as the Unbalanced XGBoost** but is now **more efficient**, reducing computational complexity.
+- The **slight drop in specificity suggests that a few removed features still had some discriminatory value**, but the gain in efficiency may outweigh this.
+- **AUC remains strong at 0.931**, indicating that the model **still generalizes well to unseen data**.
+
+
+#### 2.3.1.2. XGBoost unbalanced feature selection using PCA
+
+```{r XGBoost Model PCA}
+
+# ------------------------------------------------------------------------
+# APPLY PCA TO REDUCE DIMENSIONALITY
+# ------------------------------------------------------------------------
+
+# Identify predictor columns
+predictor_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
+
+# Convert categorical features into numeric using dummy encoding
+dummies <- dummyVars(~ ., data = train_data[, predictor_columns])
+train_encoded <- predict(dummies, newdata = train_data[, predictor_columns])
+validation_encoded <- predict(dummies, newdata = validation_data[, predictor_columns])
+
+# Convert to data frame
+train_encoded <- as.data.frame(train_encoded)
+validation_encoded <- as.data.frame(validation_encoded)
+
+# Standardize numerical features and apply PCA
+preProcess_params <- preProcess(train_encoded, method = c("center", "scale", "pca"))
+
+# Apply PCA transformation
+train_pca <- predict(preProcess_params, train_encoded)
+validation_pca <- predict(preProcess_params, validation_encoded)
+
+# Convert PCA-transformed data into numeric data frame
+train_pca <- as.data.frame(train_pca)
+validation_pca <- as.data.frame(validation_pca)
+
+# Add back the target variable
+train_pca$SURVIVAL_FLAG <- train_data$SURVIVAL_FLAG
+validation_pca$SURVIVAL_FLAG <- validation_data$SURVIVAL_FLAG
+
+# ------------------------------------------------------------------------
+# ENSURE PCA OUTPUT IS NUMERIC
+# ------------------------------------------------------------------------
+
+# Convert all columns to numeric to prevent xgb.DMatrix errors
+train_pca[] <- lapply(train_pca, function(x) if(is.character(x) | is.factor(x)) as.numeric(as.character(x)) else x)
+validation_pca[] <- lapply(validation_pca, function(x) if(is.character(x) | is.factor(x)) as.numeric(as.character(x)) else x)
+
+# Verify that all columns are numeric
+print(sapply(train_pca, class))
+print(sapply(validation_pca, class))
+
+# ------------------------------------------------------------------------
+# PREPARE DATA FOR XGBOOST
+# ------------------------------------------------------------------------
+
+# Convert PCA-transformed data to xgb.DMatrix format
+train_xgb_pca <- xgb.DMatrix(data = as.matrix(train_pca[, -ncol(train_pca)]), label = as.numeric(train_pca$SURVIVAL_FLAG))
+val_xgb_pca <- xgb.DMatrix(data = as.matrix(validation_pca[, -ncol(validation_pca)]), label = as.numeric(validation_pca$SURVIVAL_FLAG))
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Define a grid of hyperparameters
+param_grid <- expand.grid(
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.3),
+  gamma = c(0, 1, 5),
+  subsample = c(0.7, 0.8, 1.0),
+  colsample_bytree = c(0.6, 0.8, 1.0)
+)
+
+# Initialize a results data frame
+tuning_results <- data.frame()
+
+for (i in 1:nrow(param_grid)) {
+  # Extract parameters for this iteration
+  params <- param_grid[i, ]
+  
+  xgb_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    subsample = params$subsample,
+    colsample_bytree = params$colsample_bytree
+  )
+  
+  # Train the model with validation monitoring
+  set.seed(123)
+  model <- xgb.train(
+    params = xgb_params,
+    data = train_xgb_pca,
+    nrounds = 100,
+    watchlist = list(train = train_xgb_pca, validation = val_xgb_pca),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Evaluate performance on validation data
+  val_predictions <- predict(model, val_xgb_pca)
+  auc <- auc(roc(validation_pca$SURVIVAL_FLAG, val_predictions))
+  
+  # Store the results
+  tuning_results <- rbind(
+    tuning_results,
+    cbind(params, AUC = auc)
+  )
+}
+
+# Find the best parameters
+best_params <- tuning_results[which.max(tuning_results$AUC), ]
+cat("Best Parameters:\n")
+print(best_params)
+
+# ------------------------------------------------------------------------
+# TRAIN FINAL MODEL WITH BEST PARAMETERS
+# ------------------------------------------------------------------------
+
+# Train the final model using the best parameters
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = best_params$max_depth,
+  eta = best_params$eta,
+  gamma = best_params$gamma,
+  subsample = best_params$subsample,
+  colsample_bytree = best_params$colsample_bytree
+)
+
+final_xgb_model_pca <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb_pca,
+  nrounds = 100,
+  watchlist = list(train = train_xgb_pca, validation = val_xgb_pca),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# ------------------------------------------------------------------------
+# EVALUATE MODEL PERFORMANCE
+# ------------------------------------------------------------------------
+
+# Generate predictions
+val_predictions_pca <- predict(final_xgb_model_pca, val_xgb_pca)
+
+# Apply classification threshold
+threshold <- 0.1  # Adjust as needed
+val_class_pca <- ifelse(val_predictions_pca > threshold, 1, 0)
+
+# Ensure validation data target is a factor
+validation_pca$SURVIVAL_FLAG <- as.factor(validation_pca$SURVIVAL_FLAG)
+val_class_pca <- factor(val_class_pca, levels = levels(validation_pca$SURVIVAL_FLAG))
+
+# Evaluate model performance
+print_metrics(final_xgb_model_pca, validation_pca, val_predictions_pca, val_class_pca)
+
+```
+
+**Key Observations for XGBoost with PCA Feature Selection (Threshold = 0.2)**
+
+- **Accuracy (91.47%)** is **very high**, confirming that the model maintains strong classification performance even after dimensionality reduction with PCA. The slight improvement over previous models suggests that **reducing redundant features enhances efficiency** without sacrificing accuracy.
+
+- **Sensitivity (94.97%)** is **excellent**, meaning the model is highly effective at detecting positive cases (likely deaths). Compared to the **SHAP-based XGBoost model (93.08%)**, the PCA version improves recall, ensuring that **fewer high-risk patients are missed**.
+
+- **Specificity (63.21%)** has **dropped compared to SHAP (70.76%)** and **Unbalanced XGBoost (74.38%)**, meaning the model misclassifies more negative cases (survivors). This suggests that **the PCA transformation may have removed some features useful for distinguishing survivors**.
+
+- **Precision (95.42%)** is **very strong**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. Compared to **SHAP-based XGBoost (96.26%)**, there is a **small drop in precision**, suggesting the PCA model is slightly more aggressive in predicting positives.
+
+- **F1-score (95.20%)** is **one of the highest observed**, showing that the model achieves an **excellent balance between recall and precision**. This indicates **strong overall reliability**.
+
+- **AUC (0.921)** is **lower than SHAP (0.931) and Unbalanced XGBoost (0.944)** but still strong. This suggests that **PCA has improved efficiency but at the cost of some discriminatory power**.
+
+**Conclusion: Trade-off Between Performance and Efficiency**
+- The **XGBoost model with PCA retains high accuracy and recall while improving computational efficiency**.
+- **The drop in specificity suggests that PCA may have removed features that were useful for correctly classifying survivors**.
+- **F1-score remains very high**, showing that the model is still highly effective at predicting positive cases reliably.
+- **AUC is slightly lower than other models**, indicating that the PCA-based model is slightly less discriminative in separating high-risk and low-risk cases.
+
+
+### 2.3.2. XGBoost balanced undersampling
+
+```{r XGBoost Model balanced}
+
+# ------------------------------------------------------------------------
+# APPLY UNDERSAMPLING TO BALANCE THE TRAINING DATASET
+# ------------------------------------------------------------------------
+
+# Ensure the target variable is a factor
+train_data$SURVIVAL_FLAG <- as.factor(train_data$SURVIVAL_FLAG)
+
+# Apply undersampling using ROSE
+train_data_balanced <- ovun.sample(
+  SURVIVAL_FLAG ~ ., 
+  data = train_data, 
+  method = "under", 
+  N = min(table(train_data$SURVIVAL_FLAG)) * 2,  # Balance the dataset
+  seed = 123
+)$data
+
+# Check the new class distribution
+cat("Balanced Training Class Distribution (Undersampling Applied):\n")
+print(table(train_data_balanced$SURVIVAL_FLAG))
+
+# ------------------------------------------------------------------------
+# PREPARE DATA FOR XGBOOST
+# ------------------------------------------------------------------------
+
+# Prepare predictor columns
+predictor_columns <- setdiff(names(train_data_balanced), "SURVIVAL_FLAG")
+
+# Convert categorical variables to dummy variables
+dummies <- dummyVars(~ ., data = train_data_balanced[, predictor_columns])
+train_matrix <- predict(dummies, newdata = train_data_balanced[, predictor_columns])
+validation_matrix <- predict(dummies, newdata = validation_data[, predictor_columns])
+
+# Convert to xgb.DMatrix format
+train_xgb <- xgb.DMatrix(data = as.matrix(train_matrix), label = as.numeric(train_data_balanced$SURVIVAL_FLAG) - 1)
+val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(validation_data$SURVIVAL_FLAG) - 1)
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Define a grid of hyperparameters
+param_grid <- expand.grid(
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.3),
+  gamma = c(0, 1, 5),
+  subsample = c(0.7, 0.8, 1.0),
+  colsample_bytree = c(0.6, 0.8, 1.0)
+)
+
+# Initialize a results data frame
+tuning_results <- data.frame()
+
+for (i in 1:nrow(param_grid)) {
+  # Extract parameters for this iteration
+  params <- param_grid[i, ]
+  
+  xgb_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    subsample = params$subsample,
+    colsample_bytree = params$colsample_bytree
+  )
+  
+  # Train the model with validation monitoring
+  set.seed(123)
+  model <- xgb.train(
+    params = xgb_params,
+    data = train_xgb,
+    nrounds = 100,
+    watchlist = list(train = train_xgb, validation = val_xgb),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Evaluate performance on validation data
+  val_predictions <- predict(model, val_xgb)
+  auc <- auc(roc(validation_data$SURVIVAL_FLAG, val_predictions))
+  
+  # Store the results
+  tuning_results <- rbind(
+    tuning_results,
+    cbind(params, AUC = auc)
+  )
+}
+
+# Find the best parameters
+best_params <- tuning_results[which.max(tuning_results$AUC), ]
+cat("Best Parameters:\n")
+print(best_params)
+
+# ------------------------------------------------------------------------
+# TRAIN FINAL MODEL WITH BEST PARAMETERS
+# ------------------------------------------------------------------------
+
+# Train the model on the training set
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = best_params$max_depth,
+  eta = best_params$eta,
+  gamma = best_params$gamma,
+  subsample = best_params$subsample,
+  colsample_bytree = best_params$colsample_bytree
+)
+
+final_xgb_model <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb,     # Only training data
+  nrounds = 100,
+  watchlist = list(train = train_xgb, validation = val_xgb),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# ------------------------------------------------------------------------
+# EVALUATE MODEL PERFORMANCE
+# ------------------------------------------------------------------------
+
+# Generate predictions
+val_predictions <- predict(final_xgb_model, val_xgb)
+
+# Apply classification threshold
+threshold <- 0.6  # Adjust the threshold if needed
+val_class <- ifelse(val_predictions > threshold, 1, 0)
+
+# Ensure validation data target is a factor
+validation_data$SURVIVAL_FLAG <- as.factor(validation_data$SURVIVAL_FLAG)
+val_class <- factor(val_class, levels = levels(validation_data$SURVIVAL_FLAG))
+
+# Evaluate model performance
+print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
+
+```
+
+**Key Observations for XGBoost Model with Undersampling (Threshold = 0.6)**
+
+- **Accuracy (87.64%)** is **high**, indicating that the model classifies most cases correctly. This suggests a well-balanced performance between sensitivity and specificity.
+
+- **Sensitivity (88.14%)** is **strong**, meaning the model effectively detects positive cases (likely deaths). Setting the threshold to **0.6** slightly prioritizes precision while maintaining high recall.
+
+- **Specificity (83.61%)** has **significantly improved** compared to lower-threshold models, meaning the model is now better at correctly identifying negative cases (likely survivors). This reduces false positives.
+
+- **Precision (97.75%)** is **very high**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. The **higher threshold** ensures that positive classifications are highly reliable.
+
+- **F1-score (92.70%)** remains **strong**, showing an **excellent balance between precision and recall**, making the model highly reliable in both detecting high-risk patients and avoiding excessive false alarms.
+
+- **AUC (0.936)** is **excellent**, demonstrating that the model has a **strong ability to distinguish between high-risk and low-risk cases**. This suggests a well-optimized decision boundary.
+
+**Conclusion**
+The **XGBoost model with undersampling and a 0.6 threshold** achieves a **strong balance between sensitivity and specificity**, improving upon previous models by reducing false positives while maintaining high recall.
+
+### 2.3.3. XGBoost Model with SMOTE
+
+```{r XGBoost Model with SMOTE}
+
+# ------------------------------------------------------------------------
+# APPLY SMOTE TO BALANCE THE TRAINING DATASET
+# ------------------------------------------------------------------------
+
+# Ensure the target variable is a factor
+train_data$SURVIVAL_FLAG <- as.factor(train_data$SURVIVAL_FLAG)
+
+# Identify predictor columns
+predictor_columns <- setdiff(names(train_data), "SURVIVAL_FLAG")
+
+# Create dummy variable encoder using the original training data
+dummies <- dummyVars(~ ., data = train_data[, predictor_columns])
+
+# Apply the same transformation to both train and validation sets
+train_matrix <- predict(dummies, newdata = train_data[, predictor_columns])
+validation_matrix <- predict(dummies, newdata = validation_data[, predictor_columns])
+
+# Convert train data back to a data frame after dummy encoding
+train_encoded <- as.data.frame(train_matrix)
+train_encoded$SURVIVAL_FLAG <- train_data$SURVIVAL_FLAG
+
+# Apply SMOTE to balance the dataset
+smote_result <- SMOTE(
+  X = train_encoded[, -which(names(train_encoded) == "SURVIVAL_FLAG")], 
+  target = train_encoded$SURVIVAL_FLAG, 
+  K = 5, 
+  dup_size = 4
+)
+
+# Extract the SMOTE-balanced dataset
+train_data_balanced_SMOTE <- smote_result$data
+train_data_balanced_SMOTE$SURVIVAL_FLAG <- as.factor(train_data_balanced_SMOTE$class)
+train_data_balanced_SMOTE$class <- NULL  # Remove redundant class column
+
+# Check class distribution after SMOTE
+cat("Balanced Training Class Distribution (SMOTE Applied):\n")
+print(table(train_data_balanced_SMOTE$SURVIVAL_FLAG))
+
+# ------------------------------------------------------------------------
+# ENSURE VALIDATION DATA HAS THE SAME COLUMNS AS TRAINING DATA
+# ------------------------------------------------------------------------
+
+# Get column names from train data
+train_columns <- colnames(train_matrix)
+
+# Ensure validation data has the same feature columns as training data
+missing_cols <- setdiff(train_columns, colnames(validation_matrix))
+
+# Add missing columns to validation data (fill with 0)
+for (col in missing_cols) {
+  validation_matrix[, col] <- 0
+}
+
+# Reorder validation matrix columns to match train data
+validation_matrix <- validation_matrix[, train_columns]
+
+# ------------------------------------------------------------------------
+# PREPARE DATA FOR XGBOOST
+# ------------------------------------------------------------------------
+
+# Convert to xgb.DMatrix format
+train_xgb <- xgb.DMatrix(data = as.matrix(train_data_balanced_SMOTE[, train_columns]), 
+                         label = as.numeric(train_data_balanced_SMOTE$SURVIVAL_FLAG) - 1)
+val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), 
+                       label = as.numeric(validation_data$SURVIVAL_FLAG) - 1)
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Define a grid of hyperparameters
+param_grid <- expand.grid(
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.3),
+  gamma = c(0, 1, 5),
+  subsample = c(0.7, 0.8, 1.0),
+  colsample_bytree = c(0.6, 0.8, 1.0)
+)
+
+# Initialize a results data frame
+tuning_results <- data.frame()
+
+for (i in 1:nrow(param_grid)) {
+  # Extract parameters for this iteration
+  params <- param_grid[i, ]
+  
+  xgb_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    subsample = params$subsample,
+    colsample_bytree = params$colsample_bytree
+  )
+  
+  # Train the model with validation monitoring
+  set.seed(123)
+  model <- xgb.train(
+    params = xgb_params,
+    data = train_xgb,
+    nrounds = 100,
+    watchlist = list(train = train_xgb, validation = val_xgb),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Evaluate performance on validation data
+  val_predictions <- predict(model, val_xgb)
+  auc <- auc(roc(validation_data$SURVIVAL_FLAG, val_predictions))
+  
+  # Store the results
+  tuning_results <- rbind(
+    tuning_results,
+    cbind(params, AUC = auc)
+  )
+}
+
+# Find the best parameters
+best_params <- tuning_results[which.max(tuning_results$AUC), ]
+cat("Best Parameters:\n")
+print(best_params)
+
+# ------------------------------------------------------------------------
+# TRAIN FINAL MODEL WITH BEST PARAMETERS
+# ------------------------------------------------------------------------
+
+# Train the final model using the best parameters
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = best_params$max_depth,
+  eta = best_params$eta,
+  gamma = best_params$gamma,
+  subsample = best_params$subsample,
+  colsample_bytree = best_params$colsample_bytree
+)
+
+final_xgb_model <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb,     # Only training data
+  nrounds = 100,
+  watchlist = list(train = train_xgb, validation = val_xgb),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# ------------------------------------------------------------------------
+# EVALUATE MODEL PERFORMANCE
+# ------------------------------------------------------------------------
+
+# Generate predictions
+val_predictions <- predict(final_xgb_model, val_xgb)
+
+# Apply classification threshold
+threshold <- 0.2  # Adjust the threshold if needed
+val_class <- ifelse(val_predictions > threshold, 1, 0)
+
+# Ensure validation data target is a factor
+validation_data$SURVIVAL_FLAG <- as.factor(validation_data$SURVIVAL_FLAG)
+val_class <- factor(val_class, levels = levels(validation_data$SURVIVAL_FLAG))
+
+# Evaluate model performance
+print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
+
+```
+**Key Observations for XGBoost Model with SMOTE (Threshold = 0.2)**
+
+- **Accuracy (90.63%)** is **very high**, indicating that the model classifies most cases correctly. The use of **SMOTE balancing** has improved the overall predictive capability.
+
+- **Sensitivity (92.18%)** is **excellent**, meaning the model effectively detects positive cases (likely deaths). The **low threshold (0.2)** contributes to this high recall, ensuring more high-risk cases are identified.
+
+- **Specificity (78.15%)** has **improved compared to previous models**, meaning the model is now better at correctly identifying negative cases (likely survivors). This helps reduce false positives while maintaining strong recall.
+
+- **Precision (97.15%)** is **very high**, meaning that when the model predicts a positive case, it is correct almost all the time. This ensures **high confidence in positive classifications**.
+
+- **F1-score (94.60%)** is **one of the highest observed**, showing an **excellent balance between precision and recall**, making the model **highly reliable** for detecting high-risk patients.
+
+- **AUC (0.94)** is **exceptional**, indicating that the model has a **strong ability to distinguish between high-risk and low-risk cases**. The high AUC suggests that **SMOTE combined with XGBoost is an optimal approach**.
+
+#### 2.3.3.1. XGBoost Model with SMOTE: Feature Importance SHAP
+
+```{r XGBoost Model with SMOTE SHAP}
+
+# ------------------------------------------------------------------------
+# SHAP FEATURE IMPORTANCE ANALYSIS
+# ------------------------------------------------------------------------
+
+# Convert training data to xgb.DMatrix format
+train_xgb <- xgb.DMatrix(data = as.matrix(train_data_balanced_SMOTE[, -which(names(train_data_balanced_SMOTE) == "SURVIVAL_FLAG")]), 
+                         label = as.numeric(train_data_balanced_SMOTE$SURVIVAL_FLAG) - 1)
+
+# Compute SHAP values for training data
+shap_values <- predict(final_xgb_model, train_xgb, predcontrib = TRUE)
+
+# Convert SHAP values to a data frame
+shap_df <- as.data.frame(shap_values)
+
+# Add feature names (excluding the last column, which is the bias term)
+colnames(shap_df) <- c(colnames(train_matrix), "BIAS")
+
+# Remove the bias column as it does not contribute to feature ranking
+shap_df <- shap_df[, -ncol(shap_df)]
+
+# Compute mean absolute SHAP values per feature
+shap_importance <- data.frame(
+  Feature = colnames(shap_df),
+  Mean_SHAP = colMeans(abs(shap_df))
+)
+
+# Sort by importance
+shap_importance <- shap_importance[order(-shap_importance$Mean_SHAP), ]
+
+# Select the Top 30 most important features
+top_features <- shap_importance$Feature[1:30]
+
+# ------------------------------------------------------------------------
+# ENSURE VALIDATION DATA HAS THE SAME FEATURES AS TRAINING DATA
+# ------------------------------------------------------------------------
+
+# Ensure SHAP-selected features exist in both train and validation
+valid_features <- intersect(top_features, colnames(validation_data))
+
+# Add SURVIVAL_FLAG to keep the target variable
+valid_features <- c(valid_features, "SURVIVAL_FLAG")
+
+# Subset train and validation data to only matching features
+train_selected <- train_data_balanced_SMOTE[, valid_features]
+
+# Check if any SHAP-selected features are missing in validation
+missing_cols <- setdiff(valid_features, colnames(validation_data))
+
+# Add missing features to validation and fill with zeros
+for (col in missing_cols) {
+  validation_data[, col] <- 0
+}
+
+# Now subset validation data
+validation_selected <- validation_data[, valid_features]
+
+# Ensure train and validation columns match in order
+validation_selected <- validation_selected[, colnames(train_selected)]
+
+# ------------------------------------------------------------------------
+# PREPARE DATA USING SELECTED SHAP FEATURES
+# ------------------------------------------------------------------------
+
+# Convert to xgb.DMatrix format
+train_xgb_shap <- xgb.DMatrix(data = as.matrix(train_selected[, -which(names(train_selected) == "SURVIVAL_FLAG")]), 
+                              label = as.numeric(train_selected$SURVIVAL_FLAG) - 1)
+val_xgb_shap <- xgb.DMatrix(data = as.matrix(validation_selected[, -which(names(validation_selected) == "SURVIVAL_FLAG")]), 
+                            label = as.numeric(validation_selected$SURVIVAL_FLAG) - 1)
+
+# ------------------------------------------------------------------------
+# HYPERPARAMETER TUNING
+# ------------------------------------------------------------------------
+
+# Define a grid of hyperparameters
+param_grid <- expand.grid(
+  max_depth = c(4, 6, 8),
+  eta = c(0.01, 0.1, 0.3),
+  gamma = c(0, 1, 5),
+  subsample = c(0.7, 0.8, 1.0),
+  colsample_bytree = c(0.6, 0.8, 1.0)
+)
+
+# Initialize a results data frame
+tuning_results <- data.frame()
+
+for (i in 1:nrow(param_grid)) {
+  # Extract parameters for this iteration
+  params <- param_grid[i, ]
+  
+  xgb_params <- list(
+    objective = "binary:logistic",
+    eval_metric = "auc",
+    max_depth = params$max_depth,
+    eta = params$eta,
+    gamma = params$gamma,
+    subsample = params$subsample,
+    colsample_bytree = params$colsample_bytree
+  )
+  
+  # Train the model with validation monitoring
+  set.seed(123)
+  model <- xgb.train(
+    params = xgb_params,
+    data = train_xgb_shap,
+    nrounds = 100,
+    watchlist = list(train = train_xgb_shap, validation = val_xgb_shap),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  # Evaluate performance on validation data
+  val_predictions <- predict(model, val_xgb_shap)
+  auc <- auc(roc(validation_selected$SURVIVAL_FLAG, val_predictions))
+  
+  # Store the results
+  tuning_results <- rbind(
+    tuning_results,
+    cbind(params, AUC = auc)
+  )
+}
+
+# Find the best parameters
+best_params <- tuning_results[which.max(tuning_results$AUC), ]
+cat("Best Parameters:\n")
+print(best_params)
+
+# ------------------------------------------------------------------------
+# TRAIN FINAL MODEL WITH SELECTED SHAP FEATURES
+# ------------------------------------------------------------------------
+
+# Train the final model using the best parameters
+final_xgb_params <- list(
+  objective = "binary:logistic",
+  eval_metric = "auc",
+  max_depth = best_params$max_depth,
+  eta = best_params$eta,
+  gamma = best_params$gamma,
+  subsample = best_params$subsample,
+  colsample_bytree = best_params$colsample_bytree
+)
+
+final_xgb_model_shap <- xgb.train(
+  params = final_xgb_params,
+  data = train_xgb_shap,
+  nrounds = 100,
+  watchlist = list(train = train_xgb_shap, validation = val_xgb_shap),
+  early_stopping_rounds = 10,
+  verbose = 1
+)
+
+# ------------------------------------------------------------------------
+# EVALUATE MODEL PERFORMANCE
+# ------------------------------------------------------------------------
+
+# Generate predictions
+val_predictions_shap <- predict(final_xgb_model_shap, val_xgb_shap)
+
+# Apply classification threshold
+threshold <- 0.2  # Adjust as needed
+val_class_shap <- ifelse(val_predictions_shap > threshold, 1, 0)
+
+# Ensure validation data target is a factor
+validation_selected$SURVIVAL_FLAG <- as.factor(validation_selected$SURVIVAL_FLAG)
+val_class_shap <- factor(val_class_shap, levels = levels(validation_selected$SURVIVAL_FLAG))
+
+# Evaluate model performance
+print_metrics(final_xgb_model_shap, validation_selected, val_predictions_shap, val_class_shap)
+
+```
+
+** Key Findings: XGBoost with SMOTE + SHAP Selected Features**
+
+The XGBoost model trained with **SMOTE balancing and SHAP-selected features** demonstrated **strong predictive performance**, maintaining **high accuracy, recall, and precision** while improving efficiency.
+
+** Model Performance**
+- **Accuracy (88.86%)** → The model **correctly classifies most cases**, showing strong overall predictive ability.
+- **Sensitivity (90.26%)** → High recall ensures that **most high-risk cases (deaths) are detected**, making the model **reliable in medical applications**.
+- **Specificity (77.59%)** → The model correctly **identifies negative cases (survivors)**, reducing false positives.
+- **Precision (97.02%)** → **High confidence in positive predictions**, meaning that when the model predicts a death, it is **correct in most cases**.
+- **F1-score (93.52%)** → Demonstrates a **strong balance between precision and recall**, making the model **highly effective and reliable**.
+- **AUC (0.928)** → **Exceptional discriminatory ability**, confirming that the model can **distinguish between high-risk and low-risk cases effectively**.
+
+
+### 2.3.4. Comparison
+
+The table below presents the performance metrics for all tested models.
+
+```{r comparison XGBoost}
+# Create a comparison dataframe
+comparison_df <- data.frame(
+  Model_Version = c("XGBoost Unbalanced", "XGBoost Unbalanced + SHAP", "XGBoost Unbalanced + PCA", "XGBoost Undersampling", "XGBoost SMOTE", "XGBoost SMOTE + SHAP"),
+  Accuracy = c(0.9199, 0.9062, 0.8808, 0.8764, 0.9063, 0.888),
+  Sensitivity = c(0.9416, 0.9308, 0.8945, 0.8814, 0.9218, 0.903),
+  Specificity = c(0.7438, 0.7076, 0.7695, 0.8361, 0.7815, 0.776),
+  Precision = c(0.9674, 0.9626, 0.9691, 0.9775, 0.9715, 0.97),
+  F1_score = c(0.9544, 0.9464, 0.9303, 0.9270, 0.9460, 0.935),
+  AUC = c(0.9440, 0.9310, 0.9210, 0.9360, 0.9433, 0.928)
+)
+
+# Print comparison table
+knitr::kable(comparison_df, caption = "Model Performance XGBoost")
+
+```
+
+**Conclusion: XGBoost with SMOTE as the Best Model**
+
+Based on the evaluation of different **XGBoost models**, **XGBoost with SMOTE** emerges as the best choice, offering a strong balance between **accuracy, recall, specificity, and efficiency**.
+
+** Key Metrics for XGBoost SMOTE**
+- **Accuracy (90.63%)** → The model correctly classifies most cases.
+- **Sensitivity (92.18%)** → High recall ensures most high-risk cases (deaths) are detected.
+- **Specificity (78.15%)** → Better at identifying negative cases compared to other models.
+- **Precision (97.15%)** → High confidence in positive predictions.
+- **F1-score (94.60%)** → Demonstrates an excellent trade-off between recall and precision.
+- **AUC (0.9433)** → Strong overall discriminatory ability.
+
+** Why XGBoost with SMOTE?**
+1. **Balanced Trade-off Between Recall & Specificity**  
+   - Unlike **Unbalanced XGBoost**, which prioritizes recall, SMOTE achieves **better specificity (78.15%)**, reducing false positives.
+   - Compared to **XGBoost Undersampling**, which has high specificity (83.61%) but lower recall (88.14%), **SMOTE maintains high recall (92.18%)**.
+
+2. **Improved Model Efficiency**  
+   - **XGBoost with SHAP and PCA** reduce the number of features but slightly compromise on accuracy.
+   - **SMOTE retains model performance** while handling class imbalance more effectively.
+
+3. **Better Generalization**  
+   - **AUC of 0.9433** shows strong predictive capability, making it a reliable choice for deployment.
+   - **Handles imbalanced data well**, ensuring a well-rounded performance.
+
+
+# 2.4. Evaluation on Test data and Conclusion
+
 ```{r Evaluation on Test data}
 # Make predictions on the test set
-test_predictions <- predict(best_model, test_data, type = "class")
-test_probabilities <- predict(best_model, test_data, type = "prob")[, 2]
+# test_predictions <- predict(, test_data, type = "class")
+#test_probabilities <- predict(, test_data, type = "prob")[, 2]
 
 # Call the function with predictions and probabilities
-print_metrics(best_model, test_data, test_probabilities, test_predictions)
+# print_metrics(, test_data, test_probabilities, test_predictions)
 
 ```
