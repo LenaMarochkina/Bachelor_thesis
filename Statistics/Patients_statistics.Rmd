@@ -3,6 +3,9 @@ title: "Statistical Analysis"
 author: "Elena Marochkina"
 date: "`r Sys.Date()`"
 output: 
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
   html_document:
     df_print: paged
     toc: yes
@@ -18,7 +21,7 @@ knitr::opts_chunk$set(
 
 ```
 
-```{r libraries, set colors}
+```{r libraries, set colors, echo=FALSE}
 library(tidyverse)
 library(readr)
 library(dplyr)
@@ -61,7 +64,7 @@ color_palette <- c(brewer.pal(9, "Pastel1"), brewer.pal(8, "Pastel2"), brewer.pa
 
 ```
 
-```{r Descriptive Stat functions}
+```{r Descriptive Stat functions, echo=FALSE}
 # Function to calculate 95% confidence interval for the mean
 ci_95 <- function(x) {
   n <- sum(!is.na(x))
@@ -88,7 +91,7 @@ statistics <- list(
 
 ```
 
-``` {r Statictical hypothesis check}
+``` {r Statictical hypothesis check, echo=FALSE}
 perform_statistical_tests <- function(data, dependent_var, independent_var, variable_name) {
   result_table <- tibble(Variable = character(),
                          Performed_test = character(),
@@ -186,7 +189,7 @@ perform_statistical_tests <- function(data, dependent_var, independent_var, vari
 
 ```
 
-``` {r Survival Analysis}
+``` {r Survival Analysis, echo=FALSE}
 HR_assessment <- function(survival_time, event_status, predictors, data) {
   
   # Create the formula for the Cox model
@@ -245,7 +248,7 @@ HR_assessment <- function(survival_time, event_status, predictors, data) {
 
 ```
 
-```{r penalized COX Regression}
+```{r penalized COX Regression, echo=FALSE}
 # Function to run Penalized Cox Regression
 run_penalized_cox <- function(data, survival_time, event_status, predictors, penalty = "lasso") {
   # Define alpha based on penalty type
@@ -276,7 +279,7 @@ run_penalized_cox <- function(data, survival_time, event_status, predictors, pen
 }
 ```
 
-``` {r LOS Analysis}
+``` {r LOS Analysis, echo=FALSE}
 analyze_predictor_LOS <- function(data, predictor, LOS, patient_id) {
   
   # Helper function to format p-values
@@ -920,7 +923,7 @@ hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("GENDER", "AGE_AT_ADMIS
 
 print_table(hr_table)
 
-rm(hr_table, fit_age_group, fit_gender, patients_survival_outcome)
+rm(hr_table, fit_age_group, fit_gender)
 ```
 
 *Age at Admission:* This factor has a strong and highly significant association with mortality (p < 0.0001). Its hazard ratio (HR = 1.026) indicates that the risk of death increases with age, making it a crucial variable for predictive models.
@@ -938,7 +941,7 @@ result_sex <- analyze_predictor_LOS(patients_los_outcome, predictor = "GENDER", 
 merged_results <- bind_rows(result_age, result_sex)
 print_table(merged_results)
 
-rm(patients, merged_results, result_age, result_sex, patients_los_outcome)
+rm(patients, merged_results, result_age, result_sex)
 ```
 
 *Age at Admission:*
@@ -1037,7 +1040,7 @@ rm(p, categorical_vars, admissions_death_outcome_long)
 
 ``` {r Outcome 2: Length of Survival by Admissions Data visualisation}
 admissions_survival_outcome <- admissions %>%
-  select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
+  select(SUBJECT_ID, SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
   mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))
 
 # Function to create the plot
@@ -1253,7 +1256,7 @@ hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("ADMISSION_TYPE", "INSU
 
 print_table(hr_table)
 
-rm(admissions_survival_outcome, hr_table, fit_religion, fit_admission_type, fit_ethnicity, fit_insurance, fit_marital_status)
+rm(hr_table, fit_religion, fit_admission_type, fit_ethnicity, fit_insurance, fit_marital_status)
 
 ```
 
@@ -1278,7 +1281,7 @@ merged_results <- bind_rows(result_ADMISSION_TYPE, result_INSURANCE, result_RELI
 
 print_table(merged_results)
 
-rm(admissions, admissions_los_outcome, merged_results, result_RELIGION, result_MARITAL_STATUS, result_ADMISSION_TYPE, result_INSURANCE, result_ETHNICITY)
+rm(admissions, merged_results, result_RELIGION, result_MARITAL_STATUS, result_ADMISSION_TYPE, result_INSURANCE, result_ETHNICITY)
 ```
 
 Significant predictors with p < 0.05, such as:
@@ -1752,7 +1755,7 @@ hr_table_number_diagnoses <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "DIAGNOS
 
 print_table(hr_table_number_diagnoses)
 
-rm(diagnoses_survival_outcome, diagnoses_survival_numbers, fit_diagnoses_num, hr_table_number_diagnoses)
+rm(diagnoses_survival_numbers, fit_diagnoses_num, hr_table_number_diagnoses)
 
 ```
 
@@ -1814,7 +1817,7 @@ result_diagnoses_num <- analyze_predictor_LOS(diagnoses_LOS_numbers, predictor =
 
 print_table(result_diagnoses_num)
 
-rm(result_diagnoses_num, diagnosis_LOS_numbers, diagnoses_los_outcome)
+rm(result_diagnoses_num, diagnosis_LOS_numbers)
 ```
 
 Higher numbers of diagnoses (6-10 and >10) are predictive of longer ICU stays, as indicated by statistically significant results.
@@ -2068,7 +2071,7 @@ hr_table <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", c("REQUEST_CDIFF", "REQUE
 
 print_table(hr_table)
 
-rm(isolations_survival_outcome, hr_table, fit_CDIFF, fit_MRSA, fit_VRE)
+rm(hr_table, fit_CDIFF, fit_MRSA, fit_VRE)
 
 ```
 
@@ -2089,7 +2092,7 @@ merged_results <- bind_rows(result_CDIFF, result_MRSA, result_VRE)
 
 print_table(merged_results)
 
-rm(isolations, isolations_los_outcome, merged_results, result_CDIFF, result_MRSA, result_VRE)
+rm(isolations, merged_results, result_CDIFF, result_MRSA, result_VRE)
 ```
 
 REQUEST_CDIFF, REQUEST_MRSA, and REQUEST_VRE as strong predictors of LOS.
@@ -2772,7 +2775,7 @@ hr_table_number_drugs <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "prescriptio
 print_table(hr_table_number_drugs)
 
 # Remove intermediate objects to clean up
-rm(prescriptions_survival_outcome, prescriptions_survival_numbers, fit_prescriptions_num, hr_table_number_drugs)
+rm(fit_prescriptions_num, hr_table_number_drugs)
 
 ```
 
@@ -2847,9 +2850,6 @@ result_prescriptions_num <- analyze_predictor_LOS(
 
 # Print the result
 print_table(result_prescriptions_num)
-
-# Remove intermediate objects
-rm(result_prescriptions_num, prescriptions_LOS_numbers, prescriptions_los_outcome)
 
 ```
 
@@ -5508,7 +5508,7 @@ hr_table <- as.data.frame(hr_table)
 # Print the final HR table
 print_table(hr_table)
 
-rm(predictors, hr_results, hr_table, labs_blood_gas_survival_last, hr_result)
+rm(predictors, hr_results, hr_table, hr_result)
 ```
 
 ##### 7.4.2.1.1. Blood Gas the Last Value
@@ -6811,7 +6811,7 @@ print_table(bind_rows(results_procedures_without_duration_LOS, results_procedure
 rm(procedure_labels_duration, procedures_with_duration_los_outcome)
 
 # Cleanup all intermediate results
-rm(procedures, procedures_binary, procedures_binary_los_outcome_flags, procedures_long, results_procedures_without_duration_LOS, results_procedures_with_duration_LOS)
+rm(procedures, procedures_binary, procedures_long, results_procedures_without_duration_LOS, results_procedures_with_duration_LOS)
 ```
 
 From the analysis of the mixed-effects linear model on the Length of Stay (LOS) outcome, the procedures "CHEST_X_RAY," "EXTUBATION," "INTUBATION," "ARTERIAL LINE," "INVASIVE VENTILATION," and "MULTI LUMEN" all showed statistically significant associations, with p-values less than 0.05. This suggests that these procedures could have an influence on LOS and may be valuable to include in future predictive models. 
@@ -6930,7 +6930,7 @@ print_table(data, format = "html")
 ```
 
 # 10. Prepare DataSet for Future Modeling
-# 10.1. Dataset for Future Modeling Survival Outcome
+## 10.1. Dataset for Future Modeling Death Outcome
 
 ```{r Prepare DataSet for Future Modeling Death Outcome}
 patients_death_status <- patients_death_status %>%
@@ -7079,6 +7079,162 @@ write_csv(death_status, "../data/prepared_to_prediction/Death_status.csv")
 ## 10.2. Dataset for Future Modeling Survival Time
 
 ```{r Prepare DataSet for Future Modeling Survival Time}
+patients_survival_outcome <- patients_survival_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+diagnoses_transformed_survival <- diagnoses_transformed_survival %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+admissions_survival_outcome <- admissions_survival_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+diagnoses_survival_outcome <- diagnoses_survival_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+prescriptions_transformed_survival <- prescriptions_transformed_survival %>%
+  mutate(
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
+  )
+
+prescriptions_survival_numbers <- prescriptions_survival_numbers %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+isolations_survival_outcome <- isolations_survival_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+procedures_with_duration_survival_outcome <- procedures_with_duration_survival_outcome %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+procedures_binary_survival_outcome_flags <- procedures_binary_survival_outcome_flags %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+hematology_survival_last <- hematology_survival_last %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+labs_blood_gas_survival_last <- labs_blood_gas_survival_last %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+chemistry_survival_last <- chemistry_survival_last %>%
+  mutate(
+    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+  )
+
+survival_length <- admissions_survival_outcome %>%
+  left_join(patients_survival_outcome, by = c("SUBJECT_ID", "SURVIVAL_FLAG", "SURVIVAL")) %>%
+  select(-AGE_QUINTILE, -AGE_GROUP, -SUBJECT_ID)  # Remove unnecessary columns
+
+diagnoses_survival_outcome <- diagnoses_survival_outcome %>%
+  select(-LONG_TITLE, -SEQ_NUM) %>%
+  distinct()
+
+survival_length <- survival_length %>%
+  left_join(diagnoses_survival_outcome, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL"))
+
+survival_length <- survival_length %>%
+  left_join(diagnoses_transformed_survival, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
+  # Replace all NAs with 0
+  mutate(across(starts_with("ICD9"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
+  mutate(across(starts_with("ICD9"), ~ replace_na(., 0))) %>%  # Replace NA with 0
+  mutate(across(starts_with("ICD9"), ~ as.factor(.)))
+  
+survival_length <- survival_length %>%
+  left_join(prescriptions_survival_numbers, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL"))
+
+ # add ATC_ label before column names
+prescriptions_transformed_survival <- prescriptions_transformed_survival %>%
+  rename_with(~ paste0("ATC_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+
+survival_length <- survival_length %>%
+  # add ATC_ before column names
+  left_join(prescriptions_transformed_survival, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
+  # All NA's change to 0 in columns from prescriptions_transformed_death_outcome
+  mutate(across(starts_with("ATC"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
+  mutate(across(starts_with("ATC"), ~ replace_na(., 0))) %>%  # Replace NA with 0
+  mutate(across(starts_with("ATC"), ~ as.factor(.)))
+
+survival_length <- survival_length %>%
+  left_join(isolations_survival_outcome, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
+  # All NA's change to 0 
+  mutate(across(starts_with("REQUEST"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
+  mutate(across(starts_with("REQUEST"), ~ replace_na(., 0))) %>%  # Replace NA with 0
+  mutate(across(starts_with("REQUEST"), ~ as.factor(.)))
+  
+# Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
+labs_blood_gas_survival_last <- labs_blood_gas_survival_last %>%
+  rename_with(~ paste0("BG_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL))
+
+survival_length <- survival_length %>%
+  left_join(labs_blood_gas_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
+
+# Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
+hematology_survival_last <- hematology_survival_last %>%
+  rename_with(~ paste0("H_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL))
+
+survival_length <- survival_length %>%
+  left_join(hematology_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
+
+# Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
+chemistry_survival_last <- chemistry_survival_last %>%
+  rename_with(~ paste0("CH_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL)) 
+
+survival_length <- survival_length %>%
+  left_join(chemistry_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
+  # All NA's change to 0 in columns from prescriptions_transformed_death_outcome
+  mutate(across(starts_with("LAST"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
+  mutate(across(starts_with("LAST"), ~ replace_na(., 0))) %>%  # Replace NA with 0
+  mutate(across(starts_with("LAST"), ~ as.factor(.)))
+
+procedures_with_duration_survival_long <- procedures_with_duration_survival_outcome %>%
+  pivot_wider(
+    names_from = LABEL,   # Column to turn into new column names
+    values_from = VALUE,   # Column to populate the new columns
+    values_fn = list(VALUE = ~ sum(.))  # Sum values if more than 1
+  ) %>%
+  select(-"NA") %>%
+  rename(
+    ARTERIAL_LINE = "ARTERIAL LINE",
+    INVASIVE_VENTILATION = "INVASIVE VENTILATION",
+    MULTI_LUMEN = "MULTI LUMEN",
+    DIALYSIS_CRRT = "DIALYSIS - CRRT"
+  ) %>%
+  # All NULL to 0
+  mutate(across(c("ARTERIAL_LINE", "INVASIVE_VENTILATION", "MULTI_LUMEN", "DIALYSIS_CRRT"), ~ as.numeric(as.character(.)))) %>%  
+  mutate(across(c("ARTERIAL_LINE", "INVASIVE_VENTILATION", "MULTI_LUMEN", "DIALYSIS_CRRT"), ~ replace_na(., 0)))
+           
+survival_length <- survival_length %>%
+  left_join(procedures_with_duration_survival_long, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
+
+procedures_binary_survival_outcome_flags <- procedures_binary_survival_outcome_flags %>%
+  select(-SUBJECT_ID)
+
+survival_length <- survival_length %>%
+  left_join(procedures_binary_survival_outcome_flags, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
+  mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
+  mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ replace_na(., 0))) %>%  # Replace NA with 0
+  mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ as.factor(.)))
+
+# Save to CSV to directory prepared_to_prediction
+write_csv(survival_length, "../data/prepared_to_prediction/.csv")
 
 ```
 
