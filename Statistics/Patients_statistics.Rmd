@@ -654,7 +654,7 @@ patients_death_status <- Death_status_outcome %>%
   left_join(patients, by = "SUBJECT_ID") %>%
   select(SUBJECT_ID, AGE_AT_ADMISSION, GENDER, SURVIVAL_FLAG) %>%
   distinct() %>%
-  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))  # Convert to factor
+  mutate(SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1)))  # Convert to factor
 
 ggplot(patients_death_status, aes(x = GENDER, fill = SURVIVAL_FLAG)) +
   geom_bar(position = position_dodge2(width = 0.9), color = "black") +
@@ -721,7 +721,7 @@ patients_survival_outcome <- Survival_outcome %>%
   left_join(patients, by = "SUBJECT_ID") %>%
   select(SUBJECT_ID, AGE_AT_ADMISSION, GENDER, SURVIVAL_FLAG, SURVIVAL) %>%
   distinct() %>%
-  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))  # Convert to factor
+  mutate(SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1)))  # Convert to factor
 
 ggplot(patients_survival_outcome, aes(x = AGE_AT_ADMISSION, y = SURVIVAL, color = GENDER)) +
   geom_point(alpha = 0.7, size = 2, shape = 16, stroke = 0.3) +  # Scatter points
@@ -875,7 +875,7 @@ Both **Age and Gender** show highly significant associations with death status (
 ```{r Length of Survival by Patients DataExploratory analysis}
 patients_survival_outcome <- patients_survival_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG))  # Convert to numeric
   )
   
 # Generate Kaplan-Meier survival curve by GENDER
@@ -962,7 +962,7 @@ rm(patients, merged_results, result_age, result_sex)
 skimr::skim(admissions %>%
               select(-HADM_ID, -SUBJECT_ID, -SUBJECT_ID_COMPOSE) %>%
             mutate(
-              SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+              SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
             ))
 ```
 
@@ -1041,7 +1041,9 @@ rm(p, categorical_vars, admissions_death_outcome_long)
 ``` {r Outcome 2: Length of Survival by Admissions Data visualisation}
 admissions_survival_outcome <- admissions %>%
   select(SUBJECT_ID, SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY) %>%
-  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))
+  mutate(
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
+    )
 
 # Function to create the plot
 create_admission_plot <- function(data, x_var, color_var, color_palette, theme_custom) {
@@ -1090,7 +1092,7 @@ Across these plots, admission type, insurance, and marital status appear to have
 admissions_los_outcome <- admissions %>%
   left_join(LOS_outcome, by = "SUBJECT_ID_COMPOSE") %>%
   select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, ADMISSION_TYPE, INSURANCE, RELIGION, MARITAL_STATUS, ETHNICITY, LOS) %>%
-  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG))
+  mutate(SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1)))
 
 # Function to create the plot
 create_LOS_plot <- function(data, x_var, color_var, color_palette, theme_custom) {
@@ -1717,39 +1719,47 @@ All three factors are significant predictors and should be integrated into the m
 ### 4.4.2. Outcome 2: Length of Survival by Diagnoses
 
 ```{r Length of Survival by Diagnoses number Exploratory analysis}
+# Merge survival outcome with diagnoses and recode SURVIVAL_FLAG
 diagnoses_survival_outcome <- Survival_outcome %>%
   left_join(diagnoses, by = "SUBJECT_ID_COMPOSE") %>%
   select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, DIAGNOSES_NUM, LONG_TITLE, SEQ_NUM) %>%
-  mutate(
-    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG)) 
-  )
+  mutate(SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1)))
 
-# Create number of diagnoses ranges based on AGE_AT_ADMISSION
+# Create a unique dataset and categorize DIAGNOSES_NUM into intervals
 diagnoses_survival_numbers <- diagnoses_survival_outcome %>%
   select(SUBJECT_ID_COMPOSE, SURVIVAL, SURVIVAL_FLAG, DIAGNOSES_NUM) %>%
   distinct() %>%
   mutate(
     DIAGNOSES_NUM = cut(DIAGNOSES_NUM,
-                    breaks = c(0, 1, 3, 5, 10, 40),  # Include 0-1 as the first interval
-                    labels = c("1", "1-3", "3-5", "6-10", ">10"),  # Five intervals
-                    right = FALSE)  # Include the left boundary in each group
-  )
+                        breaks = c(0, 1, 3, 5, 10, 40),
+                        labels = c("1", "1-3", "3-5", "6-10", ">10"),
+                        right = FALSE)
+  ) %>%
+  droplevels()  # Remove any unused factor levels
 
-# Generate Kaplan-Meier survival curve by GENDER
-fit_diagnoses_num <- survfit(Surv(SURVIVAL, SURVIVAL_FLAG) ~ DIAGNOSES_NUM, data = diagnoses_survival_numbers)
+# Fit the Kaplan-Meier model using the processed data
+fit_diagnoses_num <- survfit(
+  Surv(SURVIVAL, as.numeric(as.character(SURVIVAL_FLAG))) ~ DIAGNOSES_NUM,
+  data = diagnoses_survival_numbers
+)
 
-# Plot the Kaplan-Meier curve
+# Plot the Kaplan-Meier curve using the same dataset as used for the model
 ggsurvplot(
   fit_diagnoses_num,
-  data = diagnoses_survival_outcome,
-  pval = TRUE,  # Display p-value for gender
-  conf.int = TRUE,  # Add confidence intervals
+  data = diagnoses_survival_numbers,   # Note: using diagnoses_survival_numbers here
+  pval = TRUE,
+  conf.int = TRUE,
   ggtheme = theme_custom,
   surv.median.line = "hv",
   legend.title = "Number of Diagnoses",
-  title = "Survival Curve by Y",
-  palette =  color_palette
+  title = "Survival Curve by Number of Diagnoses",
+  palette = color_palette
 )
+
+diagnoses_survival_numbers <- diagnoses_survival_numbers %>%
+  mutate(
+    SURVIVAL_FLAG = as.numeric(SURVIVAL_FLAG)
+  )
 
 hr_table_number_diagnoses <- HR_assessment("SURVIVAL", "SURVIVAL_FLAG", "DIAGNOSES_NUM", diagnoses_survival_numbers)
 
@@ -4575,7 +4585,7 @@ result <- list()
 
 labs_blood_gas_death_outcome_last <- labs_blood_gas_death_outcome_last %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 # Loop through each predictor
@@ -4727,7 +4737,7 @@ result <- list()
 
 labs_blood_gas_death_outcome_mean <- labs_blood_gas_death_outcome_mean %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 # Loop through each predictor
@@ -4886,7 +4896,7 @@ result <- list()
 
 hematology_death_outcome_last <- hematology_death_outcome_last %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 # Loop through each predictor
@@ -5045,7 +5055,7 @@ result <- list()
 
 hematology_death_outcome_mean <- hematology_death_outcome_mean %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 # Loop through each predictor
@@ -5238,7 +5248,7 @@ result <- list()
 
 chemistry_death_outcome_last <- chemistry_death_outcome_last %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 # Loop through each predictor
@@ -5429,7 +5439,7 @@ result <- list()
 
 chemistry_death_outcome_mean <- chemistry_death_outcome_mean %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 # Loop through each predictor
@@ -6935,47 +6945,47 @@ print_table(data, format = "html")
 ```{r Prepare DataSet for Future Modeling Death Outcome}
 patients_death_status <- patients_death_status %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 diagnoses_transformed_death_outcome <- diagnoses_transformed_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 admissions_death_outcome <- admissions_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 diagnoses_death_outcome <- diagnoses_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 prescriptions_transformed_death_outcome <- prescriptions_transformed_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 prescriptions_number <- prescriptions_number %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 isolations_death_outcome <- isolations_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 procedures_with_duration_death_outcome <- procedures_with_duration_death_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 procedures_binary_death_outcome_flags <- procedures_binary_death_outcome_flags %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
   )
 
 death_status <- admissions_death_outcome %>%
@@ -7079,64 +7089,9 @@ write_csv(death_status, "../data/prepared_to_prediction/Death_status.csv")
 ## 10.2. Dataset for Future Modeling Survival Time
 
 ```{r Prepare DataSet for Future Modeling Survival Time}
-patients_survival_outcome <- patients_survival_outcome %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-diagnoses_transformed_survival <- diagnoses_transformed_survival %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-admissions_survival_outcome <- admissions_survival_outcome %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
 diagnoses_survival_outcome <- diagnoses_survival_outcome %>%
   mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-prescriptions_transformed_survival <- prescriptions_transformed_survival %>%
-  mutate(
-    SURVIVAL_FLAG = factor(SURVIVAL_FLAG, levels = c(0, 1))
-  )
-
-prescriptions_survival_numbers <- prescriptions_survival_numbers %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-isolations_survival_outcome <- isolations_survival_outcome %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-procedures_with_duration_survival_outcome <- procedures_with_duration_survival_outcome %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-procedures_binary_survival_outcome_flags <- procedures_binary_survival_outcome_flags %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-hematology_survival_last <- hematology_survival_last %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-labs_blood_gas_survival_last <- labs_blood_gas_survival_last %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
-  )
-
-chemistry_survival_last <- chemistry_survival_last %>%
-  mutate(
-    SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)
+    SURVIVAL_FLAG = as.numeric(as.character(SURVIVAL_FLAG))
   )
 
 survival_length <- admissions_survival_outcome %>%
@@ -7158,15 +7113,16 @@ survival_length <- survival_length %>%
   mutate(across(starts_with("ICD9"), ~ as.factor(.)))
   
 survival_length <- survival_length %>%
-  left_join(prescriptions_survival_numbers, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL"))
+  left_join(prescriptions_survival_numbers, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
+  select(-prescriptions_NUM)
 
  # add ATC_ label before column names
 prescriptions_transformed_survival <- prescriptions_transformed_survival %>%
-  rename_with(~ paste0("ATC_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG))
+  rename_with(~ paste0("ATC_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL))
 
 survival_length <- survival_length %>%
   # add ATC_ before column names
-  left_join(prescriptions_transformed_survival, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
+  left_join(prescriptions_transformed_survival, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
   # All NA's change to 0 in columns from prescriptions_transformed_death_outcome
   mutate(across(starts_with("ATC"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
   mutate(across(starts_with("ATC"), ~ replace_na(., 0))) %>%  # Replace NA with 0
@@ -7184,27 +7140,28 @@ labs_blood_gas_survival_last <- labs_blood_gas_survival_last %>%
   rename_with(~ paste0("BG_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL))
 
 survival_length <- survival_length %>%
-  left_join(labs_blood_gas_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
+  left_join(labs_blood_gas_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 hematology_survival_last <- hematology_survival_last %>%
   rename_with(~ paste0("H_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL))
 
 survival_length <- survival_length %>%
-  left_join(hematology_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
+  left_join(hematology_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL"))
 
 # Add to each column except SUBJECT_ID_COMPOSE and SURVIVAL_FLAG prefix LAST_
 chemistry_survival_last <- chemistry_survival_last %>%
   rename_with(~ paste0("CH_LAST_", .x), -c(SUBJECT_ID_COMPOSE, SURVIVAL_FLAG, SURVIVAL)) 
 
 survival_length <- survival_length %>%
-  left_join(chemistry_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG")) %>%
+  left_join(chemistry_survival_last, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
   # All NA's change to 0 in columns from prescriptions_transformed_death_outcome
   mutate(across(starts_with("LAST"), ~ as.numeric(as.character(.)))) %>%  # Convert factors to numeric
   mutate(across(starts_with("LAST"), ~ replace_na(., 0))) %>%  # Replace NA with 0
   mutate(across(starts_with("LAST"), ~ as.factor(.)))
 
 procedures_with_duration_survival_long <- procedures_with_duration_survival_outcome %>%
+  select(SURVIVAL, SURVIVAL_FLAG, SUBJECT_ID_COMPOSE, LABEL, VALUE) %>%
   pivot_wider(
     names_from = LABEL,   # Column to turn into new column names
     values_from = VALUE,   # Column to populate the new columns
@@ -7222,10 +7179,7 @@ procedures_with_duration_survival_long <- procedures_with_duration_survival_outc
   mutate(across(c("ARTERIAL_LINE", "INVASIVE_VENTILATION", "MULTI_LUMEN", "DIALYSIS_CRRT"), ~ replace_na(., 0)))
            
 survival_length <- survival_length %>%
-  left_join(procedures_with_duration_survival_long, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG"))
-
-procedures_binary_survival_outcome_flags <- procedures_binary_survival_outcome_flags %>%
-  select(-SUBJECT_ID)
+  left_join(procedures_with_duration_survival_long, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL"))
 
 survival_length <- survival_length %>%
   left_join(procedures_binary_survival_outcome_flags, by = c("SUBJECT_ID_COMPOSE", "SURVIVAL_FLAG", "SURVIVAL")) %>%
@@ -7235,6 +7189,7 @@ survival_length <- survival_length %>%
 
 # Save to CSV to directory prepared_to_prediction
 write_csv(survival_length, "../data/prepared_to_prediction/.csv")
+
 
 ```
 

@@ -1,0 +1,124 @@
+---
+title: "Predictive Models - Death Status"
+author: "Elena Marochkina"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: 6
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  warning = FALSE,
+  echo = FALSE,
+  message = FALSE
+)
+
+```
+
+```{r libraries}
+library(dplyr)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+library(randomForest)
+library(performanceEstimation)  
+library(xgboost)
+library(ROSE)
+library(MLmetrics)
+library(smotefamily)
+library(SHAPforxgboost)
+```
+
+
+```{r Metrics function}
+# Function to print metrics
+print_metrics <- function(model, test_data, test_probabilities, test_predictions) {
+  # Confusion Matrix
+  conf_matrix <- confusionMatrix(test_predictions, test_data$SURVIVAL_FLAG)
+  cat("Confusion Matrix:\n")
+  print(conf_matrix)
+  
+  # Plot ROC curve
+  roc_curve <- roc(test_data$SURVIVAL_FLAG, test_probabilities) 
+  plot(
+    roc_curve,
+    col = "darkorange",
+    lwd = 2,
+    main = "ROC Curve",
+    print.auc = TRUE
+  )
+  
+  # Metrics
+  accuracy <- Accuracy(test_data$SURVIVAL_FLAG, test_predictions)
+  sensitivity <- Recall(test_data$SURVIVAL_FLAG, test_predictions)
+  specificity <- Specificity(test_data$SURVIVAL_FLAG, test_predictions)
+  precision <- Precision(test_data$SURVIVAL_FLAG, test_predictions)
+
+  # Calculate F1-score
+  f1_score <- 2 * (precision * sensitivity) / (precision + sensitivity)
+  AUC <- auc(roc_curve)
+
+  cat("Accuracy:", accuracy, "\n")
+  cat("Sensitivity (Recall):", sensitivity, "\n")
+  cat("Specificity:", specificity, "\n")
+  cat("Precision:", precision, "\n")
+  cat("F1-score:", f1_score, "\n")
+  cat("AUC:", AUC, "\n")
+}
+```
+
+# 1. Outcomes Data
+
+## 1.1. Read Data
+
+```{r read data}
+survival <- read.csv("../data/prepared_to_prediction/Survival.csv", stringsAsFactors = TRUE)
+
+# Ensure SURVIVAL_FLAG is a factor for classification
+death_status <- death_status %>%
+  mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)) %>%
+  select(-SUBJECT_ID_COMPOSE, -SUBJECT_ID, -BG_LAST_VENTILATOR)
+```
+
+```{r log transformation and scaling}
+# Log-transform and scale the data
+death_status <- death_status %>%
+  mutate(across(
+    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
+    ~ (log(. + 1))
+  ))
+
+```
+
+```{r missing values}
+death_status <- death_status %>%
+  mutate(across(
+    where(is.numeric), 
+    ~ round(ifelse(is.na(.), mean(., na.rm = TRUE), .), 2)
+  )) %>%
+  mutate(across(where(is.numeric), 
+                ~ ifelse(is.infinite(.), mean(.[!is.infinite(.)], na.rm = TRUE), .)))
+```
+
+```{r split data}
+# Set seed for reproducibility
+set.seed(12)
+
+# Split the data into training (60%), validation (20%), and testing (20%)
+train_val_index <- createDataPartition(death_status$SURVIVAL_FLAG, p = 0.8, list = FALSE)
+train_val_data <- death_status[train_val_index, ]
+test_data <- death_status[-train_val_index, ]
+
+train_index <- createDataPartition(train_val_data$SURVIVAL_FLAG, p = 0.75, list = FALSE)
+train_data <- train_val_data[train_index, ]
+validation_data <- train_val_data[-train_index, ]
+```
