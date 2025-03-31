@@ -660,7 +660,7 @@ ggplot(patients_death_status, aes(x = GENDER, fill = SURVIVAL_FLAG)) +
   geom_bar(position = position_dodge2(width = 0.9), color = "black") +
   geom_text(
     stat = 'count', aes(label = after_stat(count)),
-    position = position_dodge2(width = 0.9), vjust = -0.5
+    position = position_dodge2(width = 0.9), vjust = 0.5
   ) +
   scale_fill_manual(
     values = sample(color_palette, size = length(unique(patients_death_status$SURVIVAL_FLAG)), replace = FALSE),
@@ -7188,7 +7188,7 @@ survival_length <- survival_length %>%
   mutate(across(c("EXTUBATION", "INTUBATION", "CHEST_X_RAY"), ~ as.factor(.)))
 
 # Save to CSV to directory prepared_to_prediction
-write_csv(survival_length, "../data/prepared_to_prediction/.csv")
+write_csv(survival_length, "../data/prepared_to_prediction/Survival.csv")
 
 
 ```
