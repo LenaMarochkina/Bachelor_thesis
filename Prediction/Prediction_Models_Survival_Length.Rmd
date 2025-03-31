@@ -36,6 +36,7 @@ library(ROSE)
 library(MLmetrics)
 library(smotefamily)
 library(SHAPforxgboost)
+library(randomForestSRC)
 ```
 
 
@@ -81,26 +82,45 @@ print_metrics <- function(model, test_data, test_probabilities, test_predictions
 ## 1.1. Read Data
 
 ```{r read data}
-survival <- read.csv("../data/prepared_to_prediction/Survival.csv", stringsAsFactors = TRUE)
+df <- read.csv("../data/prepared_to_prediction/Survival.csv", stringsAsFactors = TRUE)
 
 # Ensure SURVIVAL_FLAG is a factor for classification
-death_status <- death_status %>%
+df <- df %>%
   mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)) %>%
-  select(-SUBJECT_ID_COMPOSE, -SUBJECT_ID, -BG_LAST_VENTILATOR)
+  select(-SUBJECT_ID_COMPOSE)
+```
+
+```{r balance data}
+# Convert the outcome variable to a factor if it isn't already
+df$SURVIVAL_FLAG <- as.factor(df$SURVIVAL_FLAG)
+
+# Use upSample to balance the data. This function takes as input:
+#   - x: all predictor columns
+#   - y: the outcome variable (as a factor)
+#   - yname: the name for the outcome in the output data frame
+balanced_data <- downSample(x = df[, setdiff(names(df), "SURVIVAL_FLAG")],
+                          y = df$SURVIVAL_FLAG,
+                          yname = "SURVIVAL_FLAG")
+
+# Check the new class distribution
+cat("New class distribution:\n")
+print(table(balanced_data$SURVIVAL_FLAG))
+
+
 ```
 
 ```{r log transformation and scaling}
 # Log-transform and scale the data
-death_status <- death_status %>%
+survival <- balanced_data %>%
   mutate(across(
-    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
+    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, DRUGS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
     ~ (log(. + 1))
   ))
 
 ```
 
 ```{r missing values}
-death_status <- death_status %>%
+survival <- survival %>%
   mutate(across(
     where(is.numeric), 
     ~ round(ifelse(is.na(.), mean(., na.rm = TRUE), .), 2)
@@ -110,15 +130,147 @@ death_status <- death_status %>%
 ```
 
 ```{r split data}
-# Set seed for reproducibility
-set.seed(12)
-
 # Split the data into training (60%), validation (20%), and testing (20%)
-train_val_index <- createDataPartition(death_status$SURVIVAL_FLAG, p = 0.8, list = FALSE)
-train_val_data <- death_status[train_val_index, ]
-test_data <- death_status[-train_val_index, ]
+train_val_index <- createDataPartition(survival$SURVIVAL_FLAG, p = 0.8, list = FALSE)
+train_val_data <- survival[train_val_index, ]
+test_data <- survival[-train_val_index, ]
 
 train_index <- createDataPartition(train_val_data$SURVIVAL_FLAG, p = 0.75, list = FALSE)
 train_data <- train_val_data[train_index, ]
-validation_data <- train_val_data[-train_index, ]
+validation_data <- train_val_data[-train_index, ] 
+
 ```
+
+# Boruta Feature Selection
+
+```{r Boruta}
+# Load required libraries
+library(Boruta)
+library(caret)
+
+# Assume train_data is already defined from your split.
+# Convert the outcome variable to factor for classification
+train_data$SURVIVAL_FLAG <- as.factor(train_data$SURVIVAL_FLAG)
+
+# Optionally, if you don't want to include 'time' as a predictor for classification,
+# you can exclude it in the formula (if it isn't relevant to your feature selection).
+# Otherwise, if you want to include all predictors, simply use SURVIVAL_FLAG ~ . 
+set.seed(12)
+boruta_output <- Boruta(SURVIVAL_FLAG ~ . - SURVIVAL, 
+                        data = train_data, 
+                        doTrace = 2,      # Prints progress
+                        maxRuns = 11)    # Increase if needed for convergence
+
+# Print a summary of the Boruta output
+print(boruta_output)
+
+# Optionally, if there are tentative features, you can resolve them with TentativeRoughFix:
+boruta_fixed <- TentativeRoughFix(boruta_output)
+final_features_fixed <- getSelectedAttributes(boruta_fixed, withTentative = FALSE)
+cat("Final selected features after fixing tentative ones:\n")
+print(final_features_fixed)
+
+# Plot the Boruta results
+# Optionally adjust plot margins if needed for readability
+par(mar = c(12, 5, 4, 2))
+plot(boruta_fixed, 
+     xlab = "", 
+     xaxt = "n", 
+     main = "Boruta Feature Selection")
+# Customize the x-axis with variable names
+lz <- lapply(1:ncol(boruta_fixed$ImpHistory), function(i)
+  boruta_fixed$ImpHistory[is.finite(boruta_fixed$ImpHistory[, i]), i])
+names(lz) <- colnames(boruta_fixed$ImpHistory)
+Labels <- sort(sapply(lz, median))
+axis(side = 1, las = 2, labels = names(Labels),
+     at = 1:ncol(boruta_fixed$ImpHistory), cex.axis = 0.7)
+
+```
+
+```{r feature selection}
+# Assume final_features_fixed contains the names of the important predictors
+important_vars <- final_features_fixed
+
+# For modeling, you usually want to retain the outcome variables.
+# Here we include SURVIVAL_FLAG (and SURVIVAL if needed for survival analysis).
+# Adjust the outcome variables as appropriate for your modeling.
+
+# Renew training set
+train_data_reduced <- train_data[, c("SURVIVAL", "SURVIVAL_FLAG", important_vars)]
+
+# Renew validation set
+validation_data_reduced <- validation_data[, c("SURVIVAL", "SURVIVAL_FLAG", important_vars)]
+
+# Renew test set
+test_data_reduced <- test_data[, c("SURVIVAL", "SURVIVAL_FLAG", important_vars)]
+
+```
+
+# Random Forest over Survival
+
+```{r RFS}
+
+# Define a grid of hyperparameters to tune
+tune_grid <- expand.grid(
+  mtry = c(5, 10, 15),        # Number of variables to randomly sample at each split
+  ntree = c(100, 200, 300),     # Number of trees to grow
+  nodesize = c(3, 5, 10)        # Minimum number of samples in terminal nodes
+)
+
+# Set up parallel backend
+n_cores <- min(4, parallel::detectCores() - 1)  # leave one core free
+cl <- makeCluster(n_cores)
+registerDoParallel(cl)
+
+# Parallel processing over hyperparameter configurations
+results <- foreach(i = 1:nrow(tune_grid), .packages = c("randomForestSRC", "survival")) %dopar% {
+  # Get current hyperparameter configuration
+  config <- tune_grid[i, ]
+  cat("Testing configuration:", paste(config, collapse = ", "), "\n")
+  
+  # Train the survival random forest model on the training data
+  model <- rfsrc(Surv(SURVIVAL, SURVIVAL_FLAG) ~ ., 
+                 data = train_data_reduced, 
+                 ntree = config$ntree, 
+                 mtry = config$mtry, 
+                 nodesize = config$nodesize,
+                 importance = TRUE)
+  
+  # Predict on the validation set
+  val_pred <- predict(model, newdata = validation_data_reduced)
+  
+  # Compute a risk score from the cumulative hazard function (chf)
+  risk_score <- rowSums(val_pred$chf)
+  
+  # Compute the concordance index using survival::survConcordance
+  concordance_obj <- survival::survConcordance(Surv(validation_data_reduced$SURVIVAL, 
+                                                    validation_data_reduced$SURVIVAL_FLAG) ~ risk_score)
+  cindex <- concordance_obj$concordance
+  
+  # Return a list with the configuration, cindex and the model
+  list(mtry = config$mtry, ntree = config$ntree, nodesize = config$nodesize, 
+       cindex = cindex, model = model)
+}
+
+# Stop the parallel cluster
+stopCluster(cl)
+
+# Identify the best configuration based on the highest concordance index
+cindex_values <- sapply(results, function(x) x$cindex)
+best_index <- which.max(cindex_values)
+best_result <- results[[best_index]]
+
+cat("Best configuration:\n")
+print(tune_grid[best_index, ])
+cat("Best Concordance Index on validation set:", best_result$cindex, "\n")
+
+# Generate final predictions on the validation set with the best model
+final_pred <- predict(best_result$model, newdata = validation_data_reduced)
+final_risk_score <- rowSums(final_pred$chf)
+final_concordance <- survival::survConcordance(Surv(validation_data_reduced$SURVIVAL, 
+                                                    validation_data_reduced$SURVIVAL_FLAG) ~ final_risk_score)
+cat("Final validation set Concordance Index:", final_concordance$concordance, "\n")
+
+
+```
+
