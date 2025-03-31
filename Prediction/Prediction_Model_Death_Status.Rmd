@@ -2055,6 +2055,11 @@ val_class_shap <- factor(val_class_shap, levels = levels(validation_selected$SUR
 # Evaluate model performance
 print_metrics(final_xgb_model_shap, validation_selected, val_predictions_shap, val_class_shap)
 
+print(shap_importance$Feature[1:30])
+
+# Save the trained model for later use
+saveRDS(final_xgb_model_shap, file = "Models/final_xgb_model_shap.rds")
+
 ```
 
 ** Key Findings: XGBoost with SMOTE + SHAP Selected Features**
@@ -2120,11 +2125,38 @@ Based on the evaluation of different **XGBoost models**, **XGBoost with SMOTE** 
 # 2.4. Evaluation on Test data and Conclusion
 
 ```{r Evaluation on Test data}
-# Make predictions on the test set
-# test_predictions <- predict(, test_data, type = "class")
-#test_probabilities <- predict(, test_data, type = "prob")[, 2]
 
-# Call the function with predictions and probabilities
-# print_metrics(, test_data, test_probabilities, test_predictions)
+# Predictors used in the SHAP-trained model
+shap_feature_names <- colnames(train_selected[, -which(names(train_selected) == "SURVIVAL_FLAG")])
+
+# Ensure test_matrix has all SHAP-selected columns
+missing_cols <- setdiff(shap_feature_names, colnames(test_matrix))
+for (col in missing_cols) {
+  test_matrix[, col] <- 0  # Add missing cols with 0
+}
+
+# Keep only SHAP-selected columns and sort in correct order
+test_matrix <- test_matrix[, shap_feature_names]
+
+# Convert to xgb.DMatrix
+test_xgb <- xgb.DMatrix(data = as.matrix(test_matrix))
+
+# Predict
+test_predictions <- predict(final_xgb_model_shap, test_xgb)
+test_class <- ifelse(test_predictions > 0.2, 1, 0)
+
+# Ensure SURVIVAL_FLAG is a factor
+test_data$SURVIVAL_FLAG <- as.factor(test_data$SURVIVAL_FLAG)
+test_class <- factor(test_class, levels = levels(test_data$SURVIVAL_FLAG))
+
+# Evaluate model performance on the test set
+print_metrics(final_xgb_model_shap, test_data, test_predictions, test_class)
+
+# ------------------------------------------------------------------------
+# PRINT TOP 30 SHAP FEATURES
+# ------------------------------------------------------------------------
+
+cat("Top 30 Most Important SHAP Features:\n")
+print(shap_importance$Feature[1:30])
 
 ```
