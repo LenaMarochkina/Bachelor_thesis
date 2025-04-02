@@ -85,7 +85,8 @@ death_status <- read.csv("../data/prepared_to_prediction/Death_status.csv", stri
 # Ensure SURVIVAL_FLAG is a factor for classification
 death_status <- death_status %>%
   mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)) %>%
-  select(-SUBJECT_ID_COMPOSE, -SUBJECT_ID, -BG_LAST_VENTILATOR)
+  select(-SUBJECT_ID_COMPOSE, -SUBJECT_ID, -BG_LAST_VENTILATOR) %>%
+  select(-starts_with("ATC_"))
 ```
 
 ```{r log transformation and scaling}
@@ -150,23 +151,23 @@ print_metrics(decision_tree_tuned_unbalanced, validation_data, probabilities_unb
 
 ```
 
-The Decision Tree model shows high sensitivity (**0.995**) but very low specificity (**0.084**), indicating that it correctly identifies almost all positive cases (case = 1) but struggles to distinguish negative cases (control = 0).
+The Decision Tree model shows high sensitivity (**0.99**) but very low specificity (**0.091**), indicating that it correctly identifies almost all positive cases (case = 1) but struggles to distinguish negative cases (control = 0).
 
-High Sensitivity (Recall: 0.995) → The model captures nearly all actual positive cases.
+High Sensitivity (Recall: 0.99) → The model captures nearly all actual positive cases.
 
-Low Specificity (0.084) → Many negative cases are incorrectly classified as positives (high false positive rate).
+Low Specificity (0.091) → Many negative cases are incorrectly classified as positives (high false positive rate).
 
 Moderate Precision (0.898) → While the model detects positive cases well, it misclassifies many negative cases as positives.
 
-Accuracy (0.895) → The overall classification performance appears strong, but this is misleading due to the imbalance in specificity.
+Accuracy (0.893) → The overall classification performance appears strong, but this is misleading due to the imbalance in specificity.
 
-AUC (0.642) → The model has weak overall discrimination ability, indicating it does not effectively separate cases from controls.
+AUC (0.641) → The model has weak overall discrimination ability, indicating it does not effectively separate cases from controls.
 
 **Key Takeaways**
 
 The model is biased toward predicting positive cases and fails to correctly classify negatives.
 The low specificity suggests that false positives are a significant issue, making this model unreliable in situations where false alarms are costly.
-The AUC score of 0.642 confirms that the model lacks strong discriminative power between classes.
+The AUC score of 0.641 confirms that the model lacks strong discriminative power between classes.
 
 ```{r Decision Tree Model undersampling}
 
@@ -209,18 +210,18 @@ print_metrics(decision_tree_UND, validation_data, probabilities_UND[, 2], predic
 
 After applying undersampling to balance the dataset, the Decision Tree model's performance is as follows:
 
-**Accuracy:** 0.713 The model achieved a moderate accuracy of 71.3%.
+**Accuracy:** 0.723 The model achieved a moderate accuracy of 71.3%.
 This reflects a balanced trade-off between correctly predicting both classes.
 
-**Sensitivity (Recall):** 0.711 Sensitivity remains relatively high at 71.1%, meaning the model is still fairly good at identifying positive cases (case = 1), but there is room for improvement.
+**Sensitivity (Recall):** 0.724 Sensitivity remains relatively high at 72.4%, meaning the model is still fairly good at identifying positive cases (case = 1), but there is room for improvement.
 
-**Specificity:** 0.724 Specificity increased to 72.4%, indicating the model's improved ability to correctly identify negative cases (control = 0) after undersampling.
+**Specificity:** 0.711 Specificity increased to 71.1%, indicating the model's improved ability to correctly identify negative cases (control = 0) after undersampling.
 
-**Precision:** 0.954 The model achieved high precision (95.4%), meaning when it predicts a positive case, it's more likely to be correct, with very few false positives.
+**Precision:** 0.953 The model achieved high precision (95.3%), meaning when it predicts a positive case, it's more likely to be correct, with very few false positives.
 
-**F1-score:** 0.815 The F1-score of 81.5% reflects a good balance between recall and precision, indicating that the model performs well in predicting both positive and negative cases.
+**F1-score:** 0.823 The F1-score of 82.3% reflects a good balance between recall and precision, indicating that the model performs well in predicting both positive and negative cases.
 
-**AUC:** 0.729 The AUC of 0.73 suggests moderate discriminatory power between the classes, meaning the model is better than random guessing but could be further optimized.
+**AUC:** 0.755 The AUC of 0.755 suggests moderate discriminatory power between the classes, meaning the model is better than random guessing but could be further optimized.
 
 ## 2.2. Random Forest Model
 
@@ -233,9 +234,9 @@ This reflects a balanced trade-off between correctly predicting both classes.
 
 # Set up the grid of hyperparameters for tuning
 tune_grid <- expand.grid(
-  mtry = c(10, 12, 15, 20, 30),   
-  ntree = c(100, 200, 300, 400, 500), # Number of trees
-  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
+  mtry = c(12),   
+  ntree = c(500), # Number of trees
+  maxnodes = c(50)  # Maximum nodes
 )
 
 # Tune the model using validation set
@@ -279,17 +280,17 @@ print_metrics(best_model, validation_data, probabilities, predictions)
 
 **Key Observations:**
 
--   **Accuracy (89.7%)** appears high but is misleading due to class imbalance.
+-   **Accuracy (89.5%)** appears high but is misleading due to class imbalance.
 
--   **Sensitivity (99.8%)** means nearly all positive cases (probably deaths) are detected.
+-   **Sensitivity (99.9%)** means nearly all positive cases (probably deaths) are detected.
 
--   **Specificity (7.9%)** is **extremely low**, meaning the model struggles to identify negative cases (likely survivors).
+-   **Specificity (5.4%)** is **extremely low**, meaning the model struggles to identify negative cases (likely survivors).
 
--   **Precision (89.8%)** shows a reasonable positive predictive value.
+-   **Precision (89.5%)** shows a reasonable positive predictive value.
 
--   **F1-score (94.5%)** is good, but with the imbalance, it might not be the best metric to judge performance.
+-   **F1-score (94.4%)** is good, but with the imbalance, it might not be the best metric to judge performance.
 
--   **AUC (0.87)** suggests decent overall discriminatory ability but does not fix class imbalance issues.
+-   **AUC (0.85)** suggests decent overall discriminatory ability but does not fix class imbalance issues.
 
 ### 2.2.2. Random Forest balanced (undersampling)
 
@@ -316,9 +317,9 @@ print(table(train_data_balanced_RF_UND$SURVIVAL_FLAG))
 
 # Set up the grid of hyperparameters for tuning
 tune_grid <- expand.grid(
-  mtry = c(10, 12, 15, 20, 30),   
-  ntree = c(100, 200, 300, 400, 500), # Number of trees
-  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
+  mtry = c(10),   
+  ntree = c(300), # Number of trees
+  maxnodes = c(50)  # Maximum nodes
 )
 
 # Tune the model using validation set
@@ -368,21 +369,20 @@ predictions <- predict(best_model, validation_data, type = "class")
 print_metrics(best_model, validation_data, probabilities, predictions)
 
 ```
-
-**Comparison of Balanced and Unbalanced Random Forest Survival (RFS) Models**
-
-To address class imbalance, a **Balanced RFS model (undersampling)** was tested against the **Unbalanced RFS model**.
-
 **Key Observations:**
 
-\| Metric \| Unbalanced RFS \| Balanced RFS \| \|------------\|---------------\|--------------\| \| **Accuracy** \| 89.7% \| 80.4% \| \| **Sensitivity** \| 99.8% \| 80.8% \| \| **Specificity** \| **7.9%** \| **77.5%** \| \| **Precision** \| 89.8% \| 96.7% \| \| **F1-score** \| 94.5% \| 88.0% \| \| **AUC** \| 87.0% \| 87.8% \|
+-   **Accuracy (78.9%)** appears high but is misleading due to class imbalance.
 
-**Key Takeaways:** - **Unbalanced RFS** inflates sensitivity (99.8%) but has extremely low specificity (7.9%), misclassifying many survivors.\
-- **Balanced RFS** **greatly improves specificity (77.5%)**, making it better at identifying survivors while maintaining strong sensitivity (80.8%).\
-- **Higher precision (96.7%)** in the balanced model ensures fewer false positives.\
-- **AUC remains similar (\~87%),** indicating that balancing improves reliability without loss of predictive power.
+-   **Sensitivity (79.5%)** means nearly all positive cases (probably deaths) are detected.
 
-**Conclusion:** The **Balanced RFS model** offers a **better trade-off between sensitivity and specificity**, making it a **more practical choice for clinical prediction**.
+-   **Specificity (74.0%)** is **good**.
+
+-   **Precision (96.12%)** shows a reasonable positive predictive value.
+
+-   **F1-score (87.05%)** is good, but with the imbalance, it might not be the best metric to judge performance.
+
+-   **AUC (0.86)** suggests decent overall discriminatory ability but does not fix class imbalance issues.
+
 
 #### 2.2.2.1. Feature Selection
 
@@ -505,9 +505,9 @@ print(table(train_data_balanced_VIMP$SURVIVAL_FLAG))
 
 # Define tuning grid
 tune_grid <- expand.grid(
-  mtry = c(5, 10, 15),   # Number of variables randomly sampled at each split
-  ntree = c(100, 300, 500),  # Number of trees
-  maxnodes = c(10, 30, 50)  # Maximum nodes per tree
+  mtry = c(5),   # Number of variables randomly sampled at each split
+  ntree = c(500),  # Number of trees
+  maxnodes = c(50)  # Maximum nodes per tree
 )
 
 best_model <- NULL
@@ -565,25 +565,13 @@ print_metrics(best_model, validation_data_VIMP, probabilities, predictions)
 
 ```
 
-
-**Key Observations:**
-
-| Metric                     | Value  | Explanation                                                                                                            |
-|----------------|----------------|---------------------------------------|
-| **Accuracy**               | 80.32% | The model correctly classifies 80.4% of all cases, showing overall strong performance.                                 |
-| **Sensitivity (Recall)**   | 80.76% | The model successfully detects 80.8% of true positive cases (e.g., mortality cases).                                   |
-| **Specificity**            | 76.70% | 76.7% of true negative cases (e.g., survivors) are correctly identified, showing improved balance.                     |
-| **Precision**              | 96.55% | When the model predicts a positive case, 96.6% of those predictions are correct, minimizing false positives.           |
-| **F1-score**               | 87.95%  | The balance between Precision and Recall is strong, making the model reliable for classification.                      |
-| **AUC (Area Under Curve)** | 87.61% | The model has high discriminatory ability, meaning it effectively differentiates between high-risk and low-risk cases. |
-
 **Key Takeaways:**\
-- The model achieves **strong overall accuracy (80.32%)**, correctly classifying most cases.\
-- **High sensitivity (80.76%)** ensures effective detection of mortality cases.\
-- **Good specificity (76.7%)** indicates that survivors are identified more accurately.\
-- **Excellent precision (96.55%)** reduces false positives, making predictions highly reliable.\
-- **Balanced F1-score (87.95%)** confirms that both precision and recall are well-optimized.\
-- **AUC of 87.6%** suggests that the model effectively differentiates between high-risk and low-risk cases.
+- The model achieves **strong overall accuracy (79.25%)**, correctly classifying most cases.\
+- **High sensitivity (79.97%)** ensures effective detection of mortality cases.\
+- **Good specificity (73.5%)** indicates that survivors are identified more accurately.\
+- **Excellent precision (96.05%)** reduces false positives, making predictions highly reliable.\
+- **Balanced F1-score (87.28%)** confirms that both precision and recall are well-optimized.\
+- **AUC of 85.7%** suggests that the model effectively differentiates between high-risk and low-risk cases.
 
 #### 2.2.2.2. PCA
 
@@ -653,9 +641,9 @@ print(table(train_data_balanced_RF_PCA$SURVIVAL_FLAG))
 
 # Set up hyperparameter tuning grid
 tune_grid <- expand.grid(
-  mtry = c(5, 10, 15, 20, 30),   
-  ntree = c(100, 200, 300, 400, 500), 
-  maxnodes = c(10, 20, 30, 40, 50)  
+  mtry = c(10),   
+  ntree = c(400), 
+  maxnodes = c(50)  
 )
 
 best_model_PCA <- NULL
@@ -706,55 +694,14 @@ print_metrics(best_model_PCA, validation_PCA, probabilities_PCA, predictions_PCA
 
 ```
 
-**Evaluation of Random Forest Model After PCA**
-
-After applying **Principal Component Analysis (PCA)**, the **Random Forest model** was retrained using the selected principal components.
-The following performance metrics were obtained:
-
-**Key Performance Metrics**
-
-| **Metric**                 | **Value**  | **Interpretation**                                                                                                          |
-|------------------|------------------|------------------------------------|
-| **Accuracy**               | **80.69%** | The model correctly classifies **80.7% of all cases**, indicating strong overall performance.                               |
-| **Sensitivity (Recall)**   | **81.55%** | The model successfully detects **81.5% of true positive cases (e.g., high-risk patients or mortality cases)**.              |
-| **Specificity**            | **73.73%** | **73.7% of true negative cases** (e.g., survivors) are correctly identified, showing balanced detection.                    |
-| **Precision**              | **96.17%** | When the model predicts a positive case, **96.2% of those predictions are correct**, minimizing false positives.            |
-| **F1-score**               | **88.26%** | The F1-score indicates a strong balance between **Precision and Recall**, confirming the reliability of the classification. |
-| **AUC (Area Under Curve)** | **85.92%** | The model has **good discriminatory ability**, meaning it effectively distinguishes between high-risk and low-risk cases.   |
-
-**Performance Analysis**
-
--   **Improved Sensitivity (81.55%)**:
-    -   The model detects more true positive cases than previous iterations.\
-    -   This is crucial for identifying high-risk patients early.
--   **Slight Reduction in Specificity (73.73%)**:
-    -   While specificity has slightly decreased, the trade-off results in better detection of positive cases.\
-    -   The model still maintains a reasonable ability to correctly classify negative cases.
--   **High Precision (96.17%)**:
-    -   A **high precision value** indicates that **false positives are minimized**, making the model highly confident in its positive predictions.
--   **AUC of 85.92%**:
-    -   AUC remains strong, showing the model maintains **robust classification ability** across different probability thresholds.
-
-**Comparison of PCA-Enhanced Model with Balanced RFS Model**
-
-The table below compares the **PCA-enhanced Random Forest model** against the **Balanced Random Forest Survival (RFS) model** across key performance metrics:
-
-| **Metric**     | **Unbalanced RFS** | **Balanced RFS** | **PCA-Enhanced RFS** |
-|---------------|-------------------|------------------|------------------|
-| **Accuracy**  | 89.7%  | 80.4%  | **80.7%**  |
-| **Sensitivity (Recall)** | 99.8%  | 80.8%  | **81.5%**  |
-| **Specificity** | **7.9%**  | **77.5%**  | **73.7%**  |
-| **Precision** | 89.8%  | 96.7%  | **96.2%**  |
-| **F1-score** | 94.5%  | 88.0%  | **88.3%**  |
-| **AUC**  | 87.0%  | **87.8%**  | **85.9%**  |
 
  **Key Observations**
-- **Accuracy:** PCA improved model accuracy slightly (**80.4% → 80.7%**), showing better generalization.
-- **Sensitivity:** PCA increased recall (**80.8% → 81.5%**), making the model better at detecting high-risk cases.
-- **Specificity:** PCA slightly reduced specificity (**77.5% → 73.7%**), meaning slightly more false positives.
-- **Precision:** PCA retained high precision (**96.7% → 96.2%**), ensuring the model remains confident in its positive predictions.
-- **F1-score:** Slight improvement (**88.0% → 88.3%**), indicating a more balanced trade-off between precision and recall.
-- **AUC:** PCA slightly decreased AUC (**87.8% → 85.9%**), suggesting a minor reduction in overall discriminatory power.
+- **Accuracy:** PCA improved model accuracy slightly (**80.4% → 80.93%**), showing better generalization.
+- **Sensitivity:** PCA increased recall (**80.8% → 82.48%**), making the model better at detecting high-risk cases.
+- **Specificity:** PCA slightly reduced specificity (**77.5% → 68.35%**), meaning slightly more false positives.
+- **Precision:** PCA retained high precision (**96.7% → 95.46%**), ensuring the model remains confident in its positive predictions.
+- **F1-score:** Slight improvement (**88.0% → 88.5%**), indicating a more balanced trade-off between precision and recall.
+- **AUC:** PCA slightly decreased AUC (**87.8% → 84%**), suggesting a minor reduction in overall discriminatory power.
 
 **Conclusion**
 - The **PCA-enhanced model shows slight improvements in accuracy and sensitivity**, making it **more effective at detecting high-risk cases**.
@@ -779,9 +726,9 @@ print(class_weights)
 
 # Set up the grid of hyperparameters for tuning
 tune_grid <- expand.grid(
-  mtry = c(10, 12, 15, 20, 30),   
-  ntree = c(100, 200, 300, 400, 500), # Number of trees
-  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
+  mtry = c(20),   
+  ntree = c(300), # Number of trees
+  maxnodes = c(50)  # Maximum nodes
 )
 
 # Tune the model using validation set
@@ -834,17 +781,17 @@ print_metrics(best_model, validation_data, probabilities, predictions)
 
 **Key Observations:**
 
-- **Accuracy (31.3%)** is very low, indicating that the model struggles to classify cases correctly overall. However, this might be due to its bias towards predicting the negative class.
+- **Accuracy (29.85%)** is very low, indicating that the model struggles to classify cases correctly overall. However, this might be due to its bias towards predicting the negative class.
 
-- **Sensitivity (22.8%)** is **extremely low**, meaning the model fails to detect most positive cases (likely deaths). This suggests that even with class weighting, the model is still heavily favoring the majority class.
+- **Sensitivity (21.24%)** is **extremely low**, meaning the model fails to detect most positive cases (likely deaths). This suggests that even with class weighting, the model is still heavily favoring the majority class.
 
-- **Specificity (99.6%)** is **extremely high**, meaning the model is almost perfect at identifying negative cases (likely survivors). However, this comes at the cost of missing too many positive cases.
+- **Specificity (99.36%)** is **extremely high**, meaning the model is almost perfect at identifying negative cases (likely survivors). However, this comes at the cost of missing too many positive cases.
 
-- **Precision (99.8%)** is **very high**, meaning that when the model does predict a positive case, it is almost always correct. However, given the low sensitivity, this indicates that very few positives are actually predicted.
+- **Precision (99.63%)** is **very high**, meaning that when the model does predict a positive case, it is almost always correct. However, given the low sensitivity, this indicates that very few positives are actually predicted.
 
-- **F1-score (37.2%)** is **poor**, suggesting that the balance between precision and recall is weak. The low recall significantly drags down the F1-score.
+- **F1-score (35.02%)** is **poor**, suggesting that the balance between precision and recall is weak. The low recall significantly drags down the F1-score.
 
-- **AUC (0.89)** is relatively high, showing that the model still has good discriminatory ability. However, this does not compensate for the extremely low recall, as the model is heavily skewed towards predicting negative cases.
+- **AUC (0.85)** is relatively high, showing that the model still has good discriminatory ability. However, this does not compensate for the extremely low recall, as the model is heavily skewed towards predicting negative cases.
 
 **Conclusion:**
 The **weighted Random Forest model** is overly conservative in predicting the positive class, leading to **very low sensitivity** while maintaining **high specificity and precision**. This suggests that the class weights are **not strong enough** to force the model to detect more positive cases. Adjusting the weight ratio further, lowering the decision threshold, or using oversampling techniques like **SMOTE** could help improve sensitivity
@@ -895,9 +842,9 @@ validation_data_numeric$SURVIVAL_FLAG <- validation_data$SURVIVAL_FLAG
 
 # Set up the grid of hyperparameters for tuning
 tune_grid <- expand.grid(
-  mtry = c(10, 12, 15, 20, 30),   
-  ntree = c(100, 200, 300, 400, 500), # Number of trees
-  maxnodes = c(10, 20, 30, 40, 50)  # Maximum nodes
+  mtry = c(10),   
+  ntree = c(500), # Number of trees
+  maxnodes = c(50)  # Maximum nodes
 )
 
 # Tune the model using validation set
@@ -963,17 +910,17 @@ print_metrics(best_model, validation_data_numeric, probabilities, predictions)
 
 **Key Observations**
 
-- **Accuracy (82.41%)** is strong, indicating that the model correctly classifies most cases. The trade-off between sensitivity and specificity suggests a more balanced classification compared to previous versions.
+- **Accuracy (83.00%)** is strong, indicating that the model correctly classifies most cases. The trade-off between sensitivity and specificity suggests a more balanced classification compared to previous versions.
 
-- **Sensitivity (83.66%)** is high, meaning the model effectively detects positive cases (likely deaths). This suggests that lowering the threshold to **0.3** helped improve recall compared to before.
+- **Sensitivity (85.63%)** is high, meaning the model effectively detects positive cases (likely deaths). This suggests that lowering the threshold to **0.3** helped improve recall compared to before.
 
-- **Specificity (72.37%)** has **significantly improved** compared to earlier versions, meaning the model is now better at identifying negative cases (likely survivors). This reduces false positives.
+- **Specificity (61.76%)** has **significantly improved** compared to earlier versions, meaning the model is now better at identifying negative cases (likely survivors). This reduces false positives.
 
-- **Precision (96.07%)** is very high, meaning that when the model predicts a positive case, it is almost always correct. The lower threshold **did not significantly impact precision**, showing strong positive predictive value.
+- **Precision (94.76%)** is very high, meaning that when the model predicts a positive case, it is almost always correct. The lower threshold **did not significantly impact precision**, showing strong positive predictive value.
 
-- **F1-score (89.44%)** is excellent, showing a **strong balance between precision and recall**, making the model highly reliable in both detecting high-risk patients and avoiding excessive false alarms.
+- **F1-score (89.96%)** is excellent, showing a **strong balance between precision and recall**, making the model highly reliable in both detecting high-risk patients and avoiding excessive false alarms.
 
-- **AUC (0.87)** remains **strong**, indicating good overall discriminatory ability between positive and negative cases. The model successfully distinguishes between high and low-risk groups.
+- **AUC (0.85)** remains **strong**, indicating good overall discriminatory ability between positive and negative cases. The model successfully distinguishes between high and low-risk groups.
 
 ### 2.2.5. Comparison
 
@@ -1051,11 +998,11 @@ val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(v
 
 # Define a grid of hyperparameters
 param_grid <- expand.grid(
-  max_depth = c(4, 6, 8),
-  eta = c(0.01, 0.1, 0.3),
-  gamma = c(0, 1, 5),
-  subsample = c(0.7, 0.8, 1.0),
-  colsample_bytree = c(0.6, 0.8, 1.0)
+  max_depth = c(8),
+  eta = c(0.1),
+  gamma = c(1),
+  subsample = c(1.0),
+  colsample_bytree = c(0.8)
 )
 
 # Initialize a results data frame
@@ -1142,15 +1089,15 @@ print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
 
 **Key Observations for Unbalanced XGBoost Model (Threshold = 0.2)**
 
-- **Accuracy (91.99%)** is **very high**, indicating that the model classifies most cases correctly. This suggests strong overall performance compared to previous models.
+- **Accuracy (90.45%)** is **very high**, indicating that the model classifies most cases correctly. This suggests strong overall performance compared to previous models.
 
-- **Sensitivity (94.16%)** is **excellent**, meaning the model is highly effective at detecting positive cases (likely deaths). The **low threshold (0.2)** contributes to this high recall by increasing the number of predicted positives.
+- **Sensitivity (93.1%)** is **excellent**, meaning the model is highly effective at detecting positive cases (likely deaths). The **low threshold (0.2)** contributes to this high recall by increasing the number of predicted positives.
 
-- **Specificity (74.38%)** is **significantly higher** than previous models, meaning the model is also better at correctly identifying negative cases (likely survivors). This indicates an improved balance between recall and false positives.
+- **Specificity (69.07%)** is **significantly higher** than previous models, meaning the model is also better at correctly identifying negative cases (likely survivors). This indicates an improved balance between recall and false positives.
 
-- **Precision (96.74%)** is **very strong**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. This ensures high confidence in positive classifications.
+- **Precision (96.05%)** is **very strong**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. This ensures high confidence in positive classifications.
 
-- **F1-score (95.44%)** is **the best among all tested models**, demonstrating a **near-perfect balance between precision and recall**. This suggests that the model is both effective at identifying positives and reliable in its predictions.
+- **F1-score (94.55%)** is **the best among all tested models**, demonstrating a **near-perfect balance between precision and recall**. This suggests that the model is both effective at identifying positives and reliable in its predictions.
 
 - **AUC (0.94)** is **exceptional**, showing that the model has an **excellent ability to distinguish between high-risk and low-risk cases**. The increased AUC suggests superior predictive performance over previous models.
 
@@ -1185,11 +1132,11 @@ val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix), label = as.numeric(v
 
 # Define a grid of hyperparameters
 param_grid <- expand.grid(
-  max_depth = c(4, 6, 8),
-  eta = c(0.01, 0.1, 0.3),
-  gamma = c(0, 1, 5),
-  subsample = c(0.7, 0.8, 1.0),
-  colsample_bytree = c(0.6, 0.8, 1.0)
+  max_depth = c(8),
+  eta = c(0.1),
+  gamma = c(1),
+  subsample = c(1.0),
+  colsample_bytree = c(0.8)
 )
 
 # Initialize a results data frame
@@ -1277,13 +1224,13 @@ shap_df <- data.frame(Feature = names(shap_importance), Importance = shap_import
 shap_df <- shap_df[order(-shap_df$Importance), ]
 
 # Plot SHAP feature importance
-ggplot(shap_df[1:20, ], aes(x = reorder(Feature, Importance), y = Importance)) +
+ggplot(shap_df[1:40, ], aes(x = reorder(Feature, Importance), y = Importance)) +
   geom_bar(stat = "identity", fill = "steelblue") +
   coord_flip() +
   labs(title = "Top 20 Most Important Features (SHAP)", x = "Feature", y = "SHAP Importance")
 
 # Select only the most important features (e.g., Top 30)
-top_features <- shap_df$Feature[1:30]
+top_features <- shap_df$Feature[1:40]
 # Retrieve the corresponding original dataset column names
 encoded_feature_names <- colnames(train_matrix)  # Features after dummy encoding
 
@@ -1345,17 +1292,17 @@ print_metrics(final_xgb_model_selected, validation_selected, val_predictions_sel
 
 **Key Observations for XGBoost with SHAP Feature Selection (Threshold = 0.2)**
 
-- **Accuracy (90.62%)** remains **very high**, confirming that the model **effectively classifies most cases correctly**. The slight drop from **91.99% (Unbalanced XGBoost)** suggests that dimensionality reduction has helped maintain strong performance.
+- **Accuracy (90.03%)** remains **very high**, confirming that the model **effectively classifies most cases correctly**. The slight drop from **91.99% (Unbalanced XGBoost)** suggests that dimensionality reduction has helped maintain strong performance.
 
-- **Sensitivity (93.08%)** is **excellent**, meaning the model is still highly effective at detecting positive cases (likely deaths). The slight reduction from **94.16% (Unbalanced XGBoost)** indicates that **some recall has been sacrificed in favor of model efficiency**.
+- **Sensitivity (92.95%)** is **excellent**, meaning the model is still highly effective at detecting positive cases (likely deaths). The slight reduction from **94.16% (Unbalanced XGBoost)** indicates that **some recall has been sacrificed in favor of model efficiency**.
 
-- **Specificity (70.76%)** has **decreased** compared to **74.38% in the Unbalanced XGBoost model**, meaning that the model **misclassifies slightly more negative cases (survivors)** than before. This trade-off might result from removing some less important—but still informative—features.
+- **Specificity (66.50%)** has **decreased** compared to **74.38% in the Unbalanced XGBoost model**, meaning that the model **misclassifies slightly more negative cases (survivors)** than before. This trade-off might result from removing some less important—but still informative—features.
 
-- **Precision (96.26%)** remains **very high**, showing that when the model predicts a positive case, it is correct the vast majority of the time. The minimal change from **96.74% (Unbalanced XGBoost)** indicates that **feature selection did not significantly impact precision**.
+- **Precision (95.73%)** remains **very high**, showing that when the model predicts a positive case, it is correct the vast majority of the time. The minimal change from **96.74% (Unbalanced XGBoost)** indicates that **feature selection did not significantly impact precision**.
 
-- **F1-score (94.64%)** is still **one of the highest observed**, demonstrating that the model has a **strong balance between recall and precision**. The slight drop from **95.44% (Unbalanced XGBoost)** suggests that **removing features marginally affected model robustness**.
+- **F1-score (94.32%)** is still **one of the highest observed**, demonstrating that the model has a **strong balance between recall and precision**. The slight drop from **95.44% (Unbalanced XGBoost)** suggests that **removing features marginally affected model robustness**.
 
-- **AUC (0.931)** is **slightly lower than 0.944 (Unbalanced XGBoost)**, but it remains **exceptional**, showing that the model **still has a strong ability to distinguish between high-risk and low-risk cases**. The trade-off here is **a leaner, more efficient model with almost no loss in predictive power**.
+- **AUC (0.92)** is **slightly lower than 0.944 (Unbalanced XGBoost)**, but it remains **exceptional**, showing that the model **still has a strong ability to distinguish between high-risk and low-risk cases**. The trade-off here is **a leaner, more efficient model with almost no loss in predictive power**.
 
 **Conclusion: Trade-off Between Performance and Dimensionality**
 - The **SHAP-based XGBoost model maintains high accuracy, recall, and precision while reducing the number of features**.
@@ -1425,11 +1372,11 @@ val_xgb_pca <- xgb.DMatrix(data = as.matrix(validation_pca[, -ncol(validation_pc
 
 # Define a grid of hyperparameters
 param_grid <- expand.grid(
-  max_depth = c(4, 6, 8),
-  eta = c(0.01, 0.1, 0.3),
-  gamma = c(0, 1, 5),
-  subsample = c(0.7, 0.8, 1.0),
-  colsample_bytree = c(0.6, 0.8, 1.0)
+  max_depth = c(8),
+  eta = c(0.1),
+  gamma = c(0),
+  subsample = c(1.0),
+  colsample_bytree = c(0.6)
 )
 
 # Initialize a results data frame
@@ -1522,17 +1469,17 @@ print_metrics(final_xgb_model_pca, validation_pca, val_predictions_pca, val_clas
 
 **Key Observations for XGBoost with PCA Feature Selection (Threshold = 0.2)**
 
-- **Accuracy (91.47%)** is **very high**, confirming that the model maintains strong classification performance even after dimensionality reduction with PCA. The slight improvement over previous models suggests that **reducing redundant features enhances efficiency** without sacrificing accuracy.
+- **Accuracy (85.3%)** is **very high**, confirming that the model maintains strong classification performance even after dimensionality reduction with PCA. The slight improvement over previous models suggests that **reducing redundant features enhances efficiency** without sacrificing accuracy.
 
-- **Sensitivity (94.97%)** is **excellent**, meaning the model is highly effective at detecting positive cases (likely deaths). Compared to the **SHAP-based XGBoost model (93.08%)**, the PCA version improves recall, ensuring that **fewer high-risk patients are missed**.
+- **Sensitivity (86.48%)** is **excellent**, meaning the model is highly effective at detecting positive cases (likely deaths). Compared to the **SHAP-based XGBoost model (93.08%)**, the PCA version improves recall, ensuring that **fewer high-risk patients are missed**.
 
-- **Specificity (63.21%)** has **dropped compared to SHAP (70.76%)** and **Unbalanced XGBoost (74.38%)**, meaning the model misclassifies more negative cases (survivors). This suggests that **the PCA transformation may have removed some features useful for distinguishing survivors**.
+- **Specificity (76.3%)** has **dropped compared to SHAP (70.76%)** and **Unbalanced XGBoost (74.38%)**, meaning the model misclassifies more negative cases (survivors). This suggests that **the PCA transformation may have removed some features useful for distinguishing survivors**.
 
-- **Precision (95.42%)** is **very strong**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. Compared to **SHAP-based XGBoost (96.26%)**, there is a **small drop in precision**, suggesting the PCA model is slightly more aggressive in predicting positives.
+- **Precision (96.72%)** is **very strong**, meaning that when the model predicts a positive case, it is correct the vast majority of the time. Compared to **SHAP-based XGBoost (96.26%)**, there is a **small drop in precision**, suggesting the PCA model is slightly more aggressive in predicting positives.
 
-- **F1-score (95.20%)** is **one of the highest observed**, showing that the model achieves an **excellent balance between recall and precision**. This indicates **strong overall reliability**.
+- **F1-score (91.31%)** is **one of the highest observed**, showing that the model achieves an **excellent balance between recall and precision**. This indicates **strong overall reliability**.
 
-- **AUC (0.921)** is **lower than SHAP (0.931) and Unbalanced XGBoost (0.944)** but still strong. This suggests that **PCA has improved efficiency but at the cost of some discriminatory power**.
+- **AUC (0.897)** is **lower than SHAP (0.931) and Unbalanced XGBoost (0.944)** but still strong. This suggests that **PCA has improved efficiency but at the cost of some discriminatory power**.
 
 **Conclusion: Trade-off Between Performance and Efficiency**
 - The **XGBoost model with PCA retains high accuracy and recall while improving computational efficiency**.
@@ -1775,11 +1722,11 @@ val_xgb <- xgb.DMatrix(data = as.matrix(validation_matrix),
 
 # Define a grid of hyperparameters
 param_grid <- expand.grid(
-  max_depth = c(4, 6, 8),
-  eta = c(0.01, 0.1, 0.3),
-  gamma = c(0, 1, 5),
-  subsample = c(0.7, 0.8, 1.0),
-  colsample_bytree = c(0.6, 0.8, 1.0)
+  max_depth = c(8),
+  eta = c(0.3),
+  gamma = c(1),
+  subsample = c(1.0),
+  colsample_bytree = c(0.6)
 )
 
 # Initialize a results data frame
@@ -1871,17 +1818,17 @@ print_metrics(final_xgb_model, validation_data, val_predictions, val_class)
 ```
 **Key Observations for XGBoost Model with SMOTE (Threshold = 0.2)**
 
-- **Accuracy (90.63%)** is **very high**, indicating that the model classifies most cases correctly. The use of **SMOTE balancing** has improved the overall predictive capability.
+- **Accuracy (91.10%)** is **very high**, indicating that the model classifies most cases correctly. The use of **SMOTE balancing** has improved the overall predictive capability.
 
-- **Sensitivity (92.18%)** is **excellent**, meaning the model effectively detects positive cases (likely deaths). The **low threshold (0.2)** contributes to this high recall, ensuring more high-risk cases are identified.
+- **Sensitivity (94.03%)** is **excellent**, meaning the model effectively detects positive cases (likely deaths). The **low threshold (0.2)** contributes to this high recall, ensuring more high-risk cases are identified.
 
-- **Specificity (78.15%)** has **improved compared to previous models**, meaning the model is now better at correctly identifying negative cases (likely survivors). This helps reduce false positives while maintaining strong recall.
+- **Specificity (67.55%)** has **improved compared to previous models**, meaning the model is now better at correctly identifying negative cases (likely survivors). This helps reduce false positives while maintaining strong recall.
 
-- **Precision (97.15%)** is **very high**, meaning that when the model predicts a positive case, it is correct almost all the time. This ensures **high confidence in positive classifications**.
+- **Precision (95.90%)** is **very high**, meaning that when the model predicts a positive case, it is correct almost all the time. This ensures **high confidence in positive classifications**.
 
-- **F1-score (94.60%)** is **one of the highest observed**, showing an **excellent balance between precision and recall**, making the model **highly reliable** for detecting high-risk patients.
+- **F1-score (94.95%)** is **one of the highest observed**, showing an **excellent balance between precision and recall**, making the model **highly reliable** for detecting high-risk patients.
 
-- **AUC (0.94)** is **exceptional**, indicating that the model has a **strong ability to distinguish between high-risk and low-risk cases**. The high AUC suggests that **SMOTE combined with XGBoost is an optimal approach**.
+- **AUC (0.92)** is **exceptional**, indicating that the model has a **strong ability to distinguish between high-risk and low-risk cases**. The high AUC suggests that **SMOTE combined with XGBoost is an optimal approach**.
 
 #### 2.3.3.1. XGBoost Model with SMOTE: Feature Importance SHAP
 
@@ -1917,7 +1864,7 @@ shap_importance <- data.frame(
 shap_importance <- shap_importance[order(-shap_importance$Mean_SHAP), ]
 
 # Select the Top 30 most important features
-top_features <- shap_importance$Feature[1:30]
+top_features <- shap_importance$Feature[1:40]
 
 # ------------------------------------------------------------------------
 # ENSURE VALIDATION DATA HAS THE SAME FEATURES AS TRAINING DATA
@@ -1962,11 +1909,11 @@ val_xgb_shap <- xgb.DMatrix(data = as.matrix(validation_selected[, -which(names(
 
 # Define a grid of hyperparameters
 param_grid <- expand.grid(
-  max_depth = c(4, 6, 8),
-  eta = c(0.01, 0.1, 0.3),
-  gamma = c(0, 1, 5),
-  subsample = c(0.7, 0.8, 1.0),
-  colsample_bytree = c(0.6, 0.8, 1.0)
+  max_depth = c(8),
+  eta = c(0.1),
+  gamma = c(1),
+  subsample = c(1.0),
+  colsample_bytree = c(0.8)
 )
 
 # Initialize a results data frame
@@ -2055,11 +2002,11 @@ val_class_shap <- factor(val_class_shap, levels = levels(validation_selected$SUR
 # Evaluate model performance
 print_metrics(final_xgb_model_shap, validation_selected, val_predictions_shap, val_class_shap)
 
-print(shap_importance$Feature[1:30])
+print(shap_importance$Feature[1:40])
 
 # Save the trained model for later use
+xgb.save(final_xgb_model_shap, "Models/final_xgb_model_shap.json")
 saveRDS(final_xgb_model_shap, file = "Models/final_xgb_model_shap.rds")
-
 ```
 
 ** Key Findings: XGBoost with SMOTE + SHAP Selected Features**
@@ -2067,12 +2014,12 @@ saveRDS(final_xgb_model_shap, file = "Models/final_xgb_model_shap.rds")
 The XGBoost model trained with **SMOTE balancing and SHAP-selected features** demonstrated **strong predictive performance**, maintaining **high accuracy, recall, and precision** while improving efficiency.
 
 ** Model Performance**
-- **Accuracy (88.86%)** → The model **correctly classifies most cases**, showing strong overall predictive ability.
-- **Sensitivity (90.26%)** → High recall ensures that **most high-risk cases (deaths) are detected**, making the model **reliable in medical applications**.
-- **Specificity (77.59%)** → The model correctly **identifies negative cases (survivors)**, reducing false positives.
-- **Precision (97.02%)** → **High confidence in positive predictions**, meaning that when the model predicts a death, it is **correct in most cases**.
-- **F1-score (93.52%)** → Demonstrates a **strong balance between precision and recall**, making the model **highly effective and reliable**.
-- **AUC (0.928)** → **Exceptional discriminatory ability**, confirming that the model can **distinguish between high-risk and low-risk cases effectively**.
+- **Accuracy (88.23%)** → The model **correctly classifies most cases**, showing strong overall predictive ability.
+- **Sensitivity (90.40%)** → High recall ensures that **most high-risk cases (deaths) are detected**, making the model **reliable in medical applications**.
+- **Specificity (70.68%)** → The model correctly **identifies negative cases (survivors)**, reducing false positives.
+- **Precision (96.14%)** → **High confidence in positive predictions**, meaning that when the model predicts a death, it is **correct in most cases**.
+- **F1-score (93.18%)** → Demonstrates a **strong balance between precision and recall**, making the model **highly effective and reliable**.
+- **AUC (0.9116)** → **Exceptional discriminatory ability**, confirming that the model can **distinguish between high-risk and low-risk cases effectively**.
 
 
 ### 2.3.4. Comparison
@@ -2157,6 +2104,6 @@ print_metrics(final_xgb_model_shap, test_data, test_predictions, test_class)
 # ------------------------------------------------------------------------
 
 cat("Top 30 Most Important SHAP Features:\n")
-print(shap_importance$Feature[1:30])
+print(shap_importance$Feature[1:40])
 
 ```
