@@ -660,7 +660,7 @@ ggplot(patients_death_status, aes(x = GENDER, fill = SURVIVAL_FLAG)) +
   geom_bar(position = position_dodge2(width = 0.9), color = "black") +
   geom_text(
     stat = 'count', aes(label = after_stat(count)),
-    position = position_dodge2(width = 0.9), vjust = 0.5
+    position = position_dodge2(width = 0.9), vjust = 1.7
   ) +
   scale_fill_manual(
     values = sample(color_palette, size = length(unique(patients_death_status$SURVIVAL_FLAG)), replace = FALSE),
@@ -1005,24 +1005,32 @@ admissions_death_outcome_long <- admissions_death_outcome %>%
 # List of categorical variables to plot
 categorical_vars <- c("ADMISSION_TYPE", "INSURANCE", "RELIGION", "MARITAL_STATUS", "ETHNICITY")
 
-# Loop through each variable and create a bar plot
+# Initialize a list to store the plots
+plots <- list()
+
+# Loop through each categorical variable and create a bar plot
 for (var in categorical_vars) {
-  p <- ggplot(admissions_death_outcome_long[admissions_death_outcome_long$Variable == var, ], aes(x = Value, fill = as.factor(SURVIVAL_FLAG))) +
+  p <- ggplot(admissions_death_outcome_long[admissions_death_outcome_long$Variable == var, ],
+              aes(x = Value, fill = as.factor(SURVIVAL_FLAG))) +
     geom_bar(position = "dodge2", color = "black") +
-    geom_text(stat = "count", aes(label = after_stat(count)), 
-              position = position_dodge(width = 0.9), 
-              vjust = -0.5, size = 3) +  # Adjust label position and size
+    geom_text(stat = "count", aes(label = after_stat(count)),
+              position = position_dodge(width = 0.9),
+              vjust = -0.5, size = 3) +
     labs(title = paste("Death Status by", var),
          x = "Category",
          y = "Count",
          fill = "Death Status") +
     theme_custom +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
-    scale_fill_manual(values = sample(color_palette, size = length(unique(admissions$SURVIVAL_FLAG))), labels = c("0" = "Survived", "1" = "Died"))
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_fill_manual(values = sample(color_palette, size = length(unique(admissions$SURVIVAL_FLAG))),
+                      labels = c("0" = "Survived", "1" = "Died")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.08)))  # Adds 10% extra space above the highest bar
   
-  # Print or save the plot
-  print(p)
+  plots[[var]] <- p
 }
+
+# Combine all plots into one grid with 2 columns
+grid.arrange(grobs = plots, ncol = 2)
 
 rm(p, categorical_vars, admissions_death_outcome_long)
 
@@ -1073,11 +1081,12 @@ plots <- lapply(admission_vars, function(var) {
   create_admission_plot(admissions_survival_outcome, var, "SURVIVAL_FLAG", color_palette, theme_custom)
 })
 
-# Name the plots for easy reference
-names(plots) <- admission_vars
-for (var_name in names(plots)) {
-  print(plots[[var_name]])
-}
+# Combine all plots into one grid (using 2 columns, adjust ncol as needed)
+combined_plots <- grid.arrange(grobs = plots, ncol = 2)
+
+# Save the combined plot to a file (adjust width/height as needed)
+ggsave("combined_admission_plots.png", combined_plots, width = 10, height = 8)
+
 
 rm(plots, admission_vars, create_admission_plot, var_name, var)
 ``` 
@@ -1122,11 +1131,11 @@ plots <- lapply(admission_vars, function(var) {
   create_LOS_plot(admissions_los_outcome, var, "SURVIVAL_FLAG", color_palette, theme_custom)
 })
 
-# Name the plots for easy reference
-names(plots) <- admission_vars
-for (var_name in names(plots)) {
-  print(plots[[var_name]])
-}
+# Combine all plots into one grid (using 2 columns, adjust ncol as needed)
+combined_plots <- grid.arrange(grobs = plots, ncol = 2)
+
+# Save the combined plot to a file (adjust width/height as needed)
+ggsave("combined_admission_plots.png", combined_plots, width = 10, height = 8)
 
 rm(plots, admission_vars, create_LOS_plot, var_name, var)
 ```
@@ -1674,9 +1683,9 @@ ggplot(data_long, aes(x = ICD9_CODE, y = LOS)) +
   coord_flip() +
   theme_minimal() +
   labs(
-    title = "Survival Length by ICD9 Code",
+    title = "LOS by ICD9 Code",
     x = "ICD9 Codes",
-    y = "Survival Length (Days)"
+    y = "LOS (Days)"
   ) +
   theme(axis.text.y = element_text(size = 7))
 ```
