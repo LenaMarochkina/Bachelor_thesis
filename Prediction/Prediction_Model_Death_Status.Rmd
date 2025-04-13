@@ -90,23 +90,32 @@ death_status <- death_status %>%
 ```
 
 ```{r log transformation and scaling}
-# Log-transform and scale the data
 death_status <- death_status %>%
   mutate(across(
     c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
     ~ (log(. + 1))
   ))
 
-```
-
-```{r missing values}
 death_status <- death_status %>%
   mutate(across(
-    where(is.numeric), 
+    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
     ~ round(ifelse(is.na(.), mean(., na.rm = TRUE), .), 2)
   )) %>%
-  mutate(across(where(is.numeric), 
+  mutate(across(c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
                 ~ ifelse(is.infinite(.), mean(.[!is.infinite(.)], na.rm = TRUE), .)))
+
+# Replace missing values with 0 
+death_status <- death_status %>%
+  mutate(across( where(is.numeric) & 
+                   !c(AGE_AT_ADMISSION, DIAGNOSES_NUM, PRESCRIPTIONS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
+    ~ ifelse(is.na(.), 0, .)
+  ))
+
+## Check for any remaining missing values
+missing_values <- colSums(is.na(death_status))
+print(missing_values[missing_values > 0])
+
+
 ```
 
 ```{r split data}
@@ -2005,8 +2014,7 @@ print_metrics(final_xgb_model_shap, validation_selected, val_predictions_shap, v
 print(shap_importance$Feature[1:40])
 
 # Save the trained model for later use
-xgb.save(final_xgb_model_shap, "Models/final_xgb_model_shap.json")
-saveRDS(final_xgb_model_shap, file = "Models/final_xgb_model_shap.rds")
+xgb.save(final_xgb_model_shap, "Models/final_xgb_model_shap_Death_Status.json")
 ```
 
 ** Key Findings: XGBoost with SMOTE + SHAP Selected Features**
@@ -2103,7 +2111,7 @@ print_metrics(final_xgb_model_shap, test_data, test_predictions, test_class)
 # PRINT TOP 30 SHAP FEATURES
 # ------------------------------------------------------------------------
 
-cat("Top 30 Most Important SHAP Features:\n")
+cat("Top 40 Most Important SHAP Features:\n")
 print(shap_importance$Feature[1:40])
 
 ```
