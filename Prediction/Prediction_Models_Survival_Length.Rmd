@@ -45,17 +45,22 @@ library(recipes)
 
 ```
 
-# 1. Outcomes Data
+# 1. Read data and prepare
 
-## 1.1. Read Data
-
-```{r read data}
+```{r read data Deepsurv}
 df <- read.csv("../data/prepared_to_prediction/Survival.csv", stringsAsFactors = TRUE)
 
 # Ensure SURVIVAL_FLAG is a factor for classification
 df <- df %>%
   mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)) %>%
-  select(-SUBJECT_ID_COMPOSE)
+  select(-SUBJECT_ID_COMPOSE) %>%
+  filter(SURVIVAL < 40) %>%
+  select(-starts_with("ATC_"))
+
+# Print mean values for numeric columns
+mean_values <- sapply(df, function(x) if(is.numeric(x)) mean(x, na.rm = TRUE) else NA)
+mean_values <- mean_values[!is.na(mean_values)]
+
 ```
 
 ```{r outloers check}
@@ -64,62 +69,70 @@ ggplot(df, aes(y = SURVIVAL)) +
   theme_minimal() +
   labs(title = "Boxplot of SURVIVAL Variable", y = "Survival Time (days)")
 
-df$SURVIVAL <- log(df$SURVIVAL + 1)
-
-ggplot(df, aes(y = SURVIVAL)) +
-  geom_boxplot(fill = "lightblue", outlier.color = "red") +
-  theme_minimal() +
-  labs(title = "Boxplot of SURVIVAL Variable", y = "Survival Time (days)")
-
-# Log transform all numeric vars
-df <- df %>%
-  mutate(across(
-    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, DRUGS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
-    ~ (log(. + 1))))
 ```
 
-```{r balance data}
-# Convert the outcome variable to a factor if it isn't already
-df$SURVIVAL_FLAG <- as.factor(df$SURVIVAL_FLAG)
-
-# Assuming 'df' is your dataset and 'SURVIVAL_FLAG' is the outcome variable
-
-# Separate data by class
-majority_class <- df %>% filter(SURVIVAL_FLAG == 0)
-minority_class <- df %>% filter(SURVIVAL_FLAG == 1)
-
-# Calculate the number of minority class samples to add (1.5 times the size of the majority class)
-oversample_size <- nrow(majority_class) * 1.5 - nrow(minority_class)
-
-# Oversample the minority class
-minority_class_oversampled <- minority_class[rep(1:nrow(minority_class), length.out = oversample_size), ]
-
-# Combine the majority class with the oversampled minority class
-balanced_data <- bind_rows(majority_class, minority_class_oversampled)
-
-# Check the new class distribution
-cat("New class distribution:\n")
-print(table(balanced_data$SURVIVAL_FLAG))
-```
+ ```{r balance data}
+# # Convert the outcome variable to a factor if it isn't already
+# df$SURVIVAL_FLAG <- as.factor(df$SURVIVAL_FLAG)
+#
+# # Assuming 'df' is your dataset and 'SURVIVAL_FLAG' is the outcome variable
+#
+# # Separate data by class
+# majority_class <- df %>% filter(SURVIVAL_FLAG == 0)
+# minority_class <- df %>% filter(SURVIVAL_FLAG == 1)
+#
+# # Calculate the number of minority class samples to add (1.5 times the size of the majority class)
+# oversample_size <- nrow(majority_class) * 1.5 - nrow(minority_class)
+#
+# # Oversample the minority class
+# minority_class_oversampled <- minority_class[rep(1:nrow(minority_class), length.out = oversample_size), ]
+#
+# # Combine the majority class with the oversampled minority class
+# balanced_data <- bind_rows(majority_class, minority_class_oversampled)
+#
+# # Check the new class distribution
+# cat("New class distribution:\n")
+# print(table(balanced_data$SURVIVAL_FLAG))
+ ```
 
 ```{r log transformation and scaling}
 # Log-transform and scale the data
-survival <- balanced_data %>%
+survival <- df %>%
   mutate(across(
-    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, DRUGS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
+    c(SURVIVAL, AGE_AT_ADMISSION, DIAGNOSES_NUM, starts_with(c("BG_", "H", "CH"))), 
     ~ (log(. + 1))
   ))
+
+ggplot(survival, aes(y = SURVIVAL)) +
+  geom_boxplot(fill = "lightblue", outlier.color = "red") +
+  theme_minimal() +
+  labs(title = "Boxplot of SURVIVAL Variable", y = "Survival Time (days)")
 
 ```
 
 ```{r missing values}
 survival <- survival %>%
   mutate(across(
-    where(is.numeric), 
+    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, starts_with(c("BG_", "H", "CH"))), 
     ~ round(ifelse(is.na(.), mean(., na.rm = TRUE), .), 2)
   )) %>%
-  mutate(across(where(is.numeric), 
+  mutate(across(c(AGE_AT_ADMISSION, DIAGNOSES_NUM, starts_with(c("BG_", "H", "CH"))), 
                 ~ ifelse(is.infinite(.), mean(.[!is.infinite(.)], na.rm = TRUE), .)))
+
+# Replace missing values with 0 
+survival <- survival %>%
+  mutate(across( where(is.numeric) & 
+                   !c(AGE_AT_ADMISSION, DIAGNOSES_NUM, starts_with(c("BG_", "H", "CH"))), 
+    ~ ifelse(is.na(.), 0, .)
+  ))
+
+## Check for any remaining missing values
+missing_values <- colSums(is.na(survival))
+print(missing_values[missing_values > 0])
+
+survival <- survival %>%
+  select(-BG_LAST_VENTILATOR)
+
 ```
 
 ```{r split data}
@@ -134,290 +147,839 @@ validation_data <- train_val_data[-train_index, ]
 
 ```
 
-# 2. DeepSurv 
+<!-- # 1. DeepSurv -->
 
-```{r initialise DeepSurv}
-library(reticulate)
-use_condaenv("r-deepsurv", required = TRUE)
-py_config() 
+<!-- ```{r initialise DeepSurv} -->
+<!-- library(reticulate) -->
+<!-- use_condaenv("r-deepsurv", required = TRUE) -->
+<!-- py_config() -->
+
+<!-- ``` -->
+
+
+<!-- ```{r DeepSurv Model} -->
+
+<!-- # ----------- 🧪 Feature Engineering Pipeline ----------- -->
+<!-- # Remove categorical variables -->
+<!-- categorical_vars <- c("ADMISSION_TYPE", "INSURANCE", "RELIGION", -->
+<!--                       "MARITAL_STATUS", "ETHNICITY", "GENDER") -->
+
+<!-- train_data_numeric <- train_data[, !(names(train_data) %in% categorical_vars)] %>% -->
+<!--   select(-BG_LAST_VENTILATOR) -->
+
+<!-- validation_data_numeric <- validation_data[, !(names(validation_data) %in% categorical_vars)] %>% -->
+<!--   select(-BG_LAST_VENTILATOR) -->
+
+<!-- # Ensure survival variables are numeric -->
+<!-- train_data_numeric$SURVIVAL <- as.numeric(train_data_numeric$SURVIVAL) -->
+<!-- train_data_numeric$SURVIVAL_FLAG <- as.numeric(as.character(train_data_numeric$SURVIVAL_FLAG)) -->
+<!-- validation_data_numeric$SURVIVAL <- as.numeric(validation_data_numeric$SURVIVAL) -->
+<!-- validation_data_numeric$SURVIVAL_FLAG <- as.numeric(as.character(validation_data_numeric$SURVIVAL_FLAG)) -->
+
+<!-- # Apply preprocessing -->
+<!-- rec <- recipe(~ ., data = train_data_numeric) %>% -->
+<!--   update_role(SURVIVAL, SURVIVAL_FLAG, new_role = "outcome") %>% -->
+<!--   step_nzv(all_predictors()) %>% -->
+<!--   step_corr(all_predictors(), threshold = 0.9) %>% -->
+<!--   step_center(all_numeric_predictors()) %>% -->
+<!--   step_scale(all_numeric_predictors()) -->
+
+<!-- # Prep and bake -->
+<!-- prepped <- prep(rec, training = train_data_numeric) -->
+<!-- train_data_processed <- bake(prepped, new_data = train_data_numeric) -->
+<!-- validation_data_processed <- bake(prepped, new_data = validation_data_numeric) -->
+
+<!-- # 🔧 Step 2: Define hyperparameter grid -->
+<!-- hyper_grid <- expand.grid( -->
+<!--   dropout = c(0.1), -->
+<!--   learning_rate = c(0.001), -->
+<!--   batch_size = c(64L), -->
+<!--   layers = list( -->
+<!--     c(32L, 32L) -->
+<!--   ), -->
+<!--   stringsAsFactors = FALSE -->
+<!-- ) -->
+
+<!-- # Step 3: Initialize trackers -->
+<!-- best_model <- NULL -->
+<!-- best_rmse <- Inf -->
+<!-- best_mae <- Inf -->
+<!-- best_params <- NULL -->
+<!-- best_expected_surv <- NULL -->
+<!-- results_log <- data.frame() -->
+
+<!-- # Step 4: Hyperparameter search (safe wrapped version) -->
+<!-- for (i in 1:nrow(hyper_grid)) { -->
+<!--   nodes <- hyper_grid$layers[[i]] -->
+<!--   dropout <- hyper_grid$dropout[i] -->
+<!--   lr <- hyper_grid$learning_rate[i] -->
+<!--   bs <- hyper_grid$batch_size[i] -->
+
+<!--   cat("Testing DeepSurv with:", paste(nodes, collapse = "-"), -->
+<!--       "| Dropout:", dropout, "| LR:", lr, "| Batch size:", bs, "\n") -->
+
+<!--   # Try-catch wrapper to prevent crash -->
+<!--   model <- tryCatch({ -->
+<!--     deepsurv( -->
+<!--       formula = Surv(SURVIVAL, SURVIVAL_FLAG) ~ ., -->
+<!--       data = train_data_processed, -->
+<!--       activation = "relu", -->
+<!--       num_nodes = nodes, -->
+<!--       batch_norm = TRUE, -->
+<!--       dropout = dropout, -->
+<!--       batch_size = bs, -->
+<!--       epochs = 150L, -->
+<!--       early_stopping = TRUE, -->
+<!--       patience = 10L, -->
+<!--       best_weights = TRUE, -->
+<!--       verbose = FALSE, -->
+<!--       optimizer = "adam", -->
+<!--       learning_rate = lr -->
+<!--     ) -->
+<!--   }, error = function(e) { -->
+<!--     cat("Model failed: ", e$message, "\n") -->
+<!--     return(NULL) -->
+<!--   }) -->
+
+<!--   # Skip if model failed -->
+<!--   if (is.null(model)) next -->
+
+<!--   # Predict survival function -->
+<!--   surv_preds <- tryCatch({ -->
+<!--     predict(model, newdata = validation_data_processed, type = "surv") -->
+<!--   }, error = function(e) { -->
+<!--     cat("Prediction failed: ", e$message, "\n") -->
+<!--     return(NULL) -->
+<!--   }) -->
+
+<!--   if (is.null(surv_preds)) next -->
+
+<!--   # Evaluate model using expected survival time -->
+<!--   time_grid <- as.numeric(colnames(surv_preds)) -->
+<!--   expected_surv_time <- apply(surv_preds, 1, function(prob) trapz(time_grid, prob)) -->
+
+<!--   rmse_val <- rmse(validation_data_processed$SURVIVAL, expected_surv_time) -->
+<!--   mae_val <- mae(validation_data_processed$SURVIVAL, expected_surv_time) -->
+
+<!--   cat("📈 RMSE:", round(rmse_val, 2), "| MAE:", round(mae_val, 2), "\n\n") -->
+
+<!--   results_log <- rbind( -->
+<!--     results_log, -->
+<!--     data.frame( -->
+<!--       Nodes = paste(nodes, collapse = "-"), -->
+<!--       Dropout = dropout, -->
+<!--       LR = lr, -->
+<!--       Batch = bs, -->
+<!--       RMSE = round(rmse_val, 3), -->
+<!--       MAE = round(mae_val, 3) -->
+<!--     ) -->
+<!--   ) -->
+
+<!--   if (rmse_val < best_rmse || (rmse_val == best_rmse && mae_val < best_mae)) { -->
+<!--     best_model <- model -->
+<!--     best_rmse <- rmse_val -->
+<!--     best_mae <- mae_val -->
+<!--     best_params <- list(nodes = nodes, dropout = dropout, lr = lr, batch_size = bs) -->
+<!--     best_expected_surv <- expected_surv_time -->
+<!--   } -->
+<!-- } -->
+
+
+<!-- # Step 5: Final output -->
+<!-- validation_data_processed$Predicted_Survival_Time <- best_expected_surv -->
+
+<!-- # Unlog the predicted survival times if they were log-transformed -->
+<!-- # Applying exp() function to reverse log transformation -->
+<!-- predicted_survival_unlogged <- exp(best_expected_surv) -->
+
+<!-- # Add unlogged predicted survival times to the validation data -->
+<!-- validation_data_processed$Predicted_Survival_Time <- predicted_survival_unlogged -->
+
+<!-- cat("\n Best DeepSurv configuration:\n") -->
+<!-- cat("  Layers:", paste(best_params$nodes, collapse = "-"), "\n") -->
+<!-- cat("  Dropout:", best_params$dropout, "| LR:", best_params$lr, "| Batch size:", best_params$batch_size, "\n") -->
+<!-- cat("  RMSE:", round(best_rmse, 2), "| MAE:", round(best_mae, 2), "\n") -->
+
+<!-- # Show predictions vs actual (after unlogging) -->
+<!-- head(validation_data_processed[, c("SURVIVAL", "Predicted_Survival_Time")]) -->
+
+<!-- # Show all results sorted by RMSE and MAE -->
+<!-- results_log <- results_log[order(results_log$RMSE, results_log$MAE), ] -->
+<!-- print(results_log) -->
+
+<!-- # ------------------------- Calculate True MAE and RMSE ------------------------ -->
+
+<!-- # True MAE and RMSE after unlogging -->
+<!-- true_mae <- mae(validation_data_processed$SURVIVAL, validation_data_processed$Predicted_Survival_Time) -->
+<!-- true_rmse <- rmse(validation_data_processed$SURVIVAL, validation_data_processed$Predicted_Survival_Time) -->
+
+<!-- # Display true MAE and RMSE -->
+<!-- cat("\nTrue MAE (after unlogging):", round(true_mae, 2), "\n") -->
+<!-- cat("True RMSE (after unlogging):", round(true_rmse, 2), "\n") -->
+
+<!-- # ------------------------- Calibration Curve ------------------------ -->
+<!-- # ------------------------- Calibration with Isotonic Regression ------------------------ -->
+
+<!-- library(ggplot2)  # For plotting -->
+<!-- library(pracma)   # For trapz() -->
+
+<!-- # Apply isotonic regression to calibrate predicted survival times -->
+<!-- calibration_model <- stats::approxfun( -->
+<!--   validation_data_processed$Predicted_Survival_Time, -->
+<!--   validation_data_processed$SURVIVAL, -->
+<!--   method = "linear", rule = 2 -->
+<!-- ) -->
+
+<!-- # Use the isotonic model to adjust the predicted survival times -->
+<!-- calibrated_predictions <- calibration_model(validation_data_processed$Predicted_Survival_Time) -->
+
+<!-- # Add the calibrated predictions to your validation data -->
+<!-- validation_data_processed$Calibrated_Survival_Time <- calibrated_predictions -->
+
+<!-- # Recalculate MAE and RMSE after calibration -->
+<!-- calibrated_rmse <- rmse(validation_data_processed$SURVIVAL, -->
+<!--                         validation_data_processed$Calibrated_Survival_Time) -->
+<!-- calibrated_mae <- mae(validation_data_processed$SURVIVAL, -->
+<!--                       validation_data_processed$Calibrated_Survival_Time) -->
+
+<!-- cat("\nalibrated MAE:", round(calibrated_mae, 2), "\n") -->
+<!-- cat("Calibrated RMSE:", round(calibrated_rmse, 2), "\n") -->
+
+<!-- # Visualize calibration with a new plot -->
+<!-- calibration_data <- data.frame( -->
+<!--   predicted = validation_data_processed$Predicted_Survival_Time, -->
+<!--   calibrated = validation_data_processed$Calibrated_Survival_Time, -->
+<!--   observed = validation_data_processed$SURVIVAL -->
+<!-- ) -->
+
+<!-- # Plot the calibration curve for the calibrated predictions -->
+<!-- calibration_plot <- ggplot(calibration_data, aes(x = predicted, y = calibrated)) + -->
+<!--   geom_point(alpha = 0.5) + -->
+<!--   geom_smooth(method = "loess", se = FALSE, color = "blue") + -->
+<!--   labs(title = "Calibration Curve (Isotonic Regression)", -->
+<!--        x = "Predicted Survival Time", -->
+<!--        y = "Calibrated Survival Time") + -->
+<!--   theme_minimal() -->
+
+<!-- print(calibration_plot) -->
+
+<!-- # Save the DeepSurv model for future use -->
+<!-- saveRDS(best_model, "Models/deepsurv_model.rds") -->
+<!-- ``` -->
+
+```{r histogram of actual and predicted survival times}
+# library(reshape2)
+# library(ggplot2)
+# 
+# # Create a data frame with both actual and predicted survival times from your processed validation data
+# df_surv <- data.frame(
+#   Actual = validation_data_processed$SURVIVAL,
+#   Predicted = validation_data_processed$Predicted_Survival_Time
+# )
+# 
+# # Melt the data frame into long format for ggplot
+# df_long <- melt(df_surv, variable.name = "Type", value.name = "Survival_Time")
+# 
+# # Create the density plot
+# ggplot(df_long, aes(x = Survival_Time, fill = Type)) +
+#   geom_density(alpha = 0.5, adjust = 1) +
+#   labs(title = "Density Plot of Actual and Predicted Survival Times",
+#        x = "Survival Time (Days)",
+#        y = "Density") +
+#   scale_fill_manual(values = c("Actual" = "blue", "Predicted" = "red")) +
+#   theme_minimal(base_size = 14) +
+#   theme(plot.title = element_text(face = "bold", hjust = 0.5),
+#         legend.title = element_blank(),
+#         legend.position = "bottom")
+
 ```
 
-```{r DeepSurv Model}
+# 1. GBM
 
-# ----------- 🧪 Feature Engineering Pipeline -----------
-# Remove categorical variables
-categorical_vars <- c("ADMISSION_TYPE", "INSURANCE", "RELIGION", 
-                      "MARITAL_STATUS", "ETHNICITY", "GENDER")
+```{r gbm}
+# ----------------------------
+# Load Necessary Libraries
+# ----------------------------
+library(gbm)         # For gradient boosting model
+library(survival)    # For survival analysis functions
+library(pracma)      # For numerical functions, if needed
+library(Metrics)     # For evaluation metrics (RMSE, MAE)
+library(ggplot2)     # For plotting
+library(reshape2)    # For reshaping data (density plot)
 
-train_data_numeric <- train_data[, !(names(train_data) %in% categorical_vars)] %>%
-  select(-BG_LAST_VENTILATOR)
+# ----------------------------
+# Prepare Data: Ensure Numeric Encoding for the Outcome
+# ----------------------------
+# Remove rows with SURVIVAL FLAG equal to 0
+train_data <- train_data %>% filter(SURVIVAL_FLAG == 1)
+validation_data <- validation_data %>% filter(SURVIVAL_FLAG == 1)
 
-validation_data_numeric <- validation_data[, !(names(validation_data) %in% categorical_vars)] %>%
-  select(-BG_LAST_VENTILATOR)
+train_data$SURVIVAL_FLAG <- as.numeric(as.character(train_data$SURVIVAL_FLAG)) 
+validation_data$SURVIVAL_FLAG <- as.numeric(as.character(validation_data$SURVIVAL_FLAG))
+validation_data <- validation_data
 
-# Ensure survival variables are numeric
-train_data_numeric$SURVIVAL <- as.numeric(train_data_numeric$SURVIVAL)
-train_data_numeric$SURVIVAL_FLAG <- as.numeric(train_data_numeric$SURVIVAL_FLAG)
-validation_data_numeric$SURVIVAL <- as.numeric(validation_data_numeric$SURVIVAL)
-validation_data_numeric$SURVIVAL_FLAG <- as.numeric(validation_data_numeric$SURVIVAL_FLAG)
-
-# Apply preprocessing
-rec <- recipe(~ ., data = train_data_numeric) %>%
-  update_role(SURVIVAL, SURVIVAL_FLAG, new_role = "outcome") %>%
-  step_nzv(all_predictors()) %>%
-  step_corr(all_predictors(), threshold = 0.9) %>%
-  step_center(all_numeric_predictors()) %>%
-  step_scale(all_numeric_predictors())
-
-# Prep and bake
-prepped <- prep(rec, training = train_data_numeric)
-train_data_processed <- bake(prepped, new_data = train_data_numeric)
-validation_data_processed <- bake(prepped, new_data = validation_data_numeric)
-
-# 🔧 Step 2: Define hyperparameter grid
-hyper_grid <- expand.grid(
-  dropout = c(0.1, 0.2, 0.3),
-  learning_rate = c(0.0005, 0.001),
-  batch_size = c(64L, 128L),
-  layers = list(
-    c(32L, 32L), c(64L, 64L), c(128L, 64L),
-    c(128L, 128L), c(256L, 128L), c(64L, 32L)
-  ),
-  stringsAsFactors = FALSE
+# ----------------------------
+# Define a Grid of Hyperparameters for GBM
+# ----------------------------
+# These hyperparameters can be expanded or modified as needed.
+tune_grid <- expand.grid(
+  n.trees = c(500),
+  interaction.depth = c(4),
+  shrinkage = c(0.01)
 )
 
-# Step 3: Initialize trackers
+# ----------------------------
+# Grid Search: Choose Best Model Based on RMSE (Primary) and MAE (Tie-breaker)
+# ----------------------------
 best_model <- NULL
 best_rmse <- Inf
 best_mae <- Inf
 best_params <- NULL
-best_expected_surv <- NULL
-results_log <- data.frame()
+best_predicted_median <- NULL
 
-# Step 4: Hyperparameter search
-for (i in 1:nrow(hyper_grid)) {
-  nodes <- hyper_grid$layers[[i]]
-  dropout <- hyper_grid$dropout[i]
-  lr <- hyper_grid$learning_rate[i]
-  bs <- hyper_grid$batch_size[i]
+cat("Starting grid search over hyperparameters...\n")
+for (i in 1:nrow(tune_grid)) {
+  params <- tune_grid[i, ]
+  cat("Testing configuration: n.trees =", params$n.trees,
+      ", interaction.depth =", params$interaction.depth,
+      ", shrinkage =", params$shrinkage, "\n")
   
-  cat(" Testing DeepSurv with:", paste(nodes, collapse = "-"), 
-      "| Dropout:", dropout, "| LR:", lr, "| Batch size:", bs, "\n")
+  set.seed(123)  # For reproducibility
   
-  model <- deepsurv(
-    formula = Surv(SURVIVAL, SURVIVAL_FLAG) ~ .,
-    data = train_data_processed,
-    activation = "relu",
-    num_nodes = nodes,
-    batch_norm = TRUE,
-    dropout = dropout,
-    batch_size = bs,
-    epochs = 150L,
-    early_stopping = TRUE,
-    patience = 10L,
-    best_weights = TRUE,
-    verbose = FALSE,
-    optimizer = "adam",
-    learning_rate = lr
-  )
+  # Fit the GBM survival model using Cox PH loss
+  gbm_model <- gbm(Surv(SURVIVAL, SURVIVAL_FLAG) ~ .,
+                   data = train_data,
+                   distribution = "coxph",
+                   n.trees = params$n.trees,
+                   interaction.depth = params$interaction.depth,
+                   shrinkage = params$shrinkage,
+                   cv.folds = 5,
+                   verbose = FALSE)
   
-  surv_preds <- predict(model, newdata = validation_data_processed, type = "surv")
-  time_grid <- as.numeric(colnames(surv_preds))
-  expected_surv_time <- apply(surv_preds, 1, function(prob) trapz(time_grid, prob))
+  # Get the optimal number of trees via cross-validation
+  best_iter <- gbm.perf(gbm_model, method = "cv", plot.it = FALSE)
+  cat("Best iteration (n.trees):", best_iter, "\n")
   
-  rmse_val <- rmse(validation_data_processed$SURVIVAL, expected_surv_time)
-  mae_val <- mae(validation_data_processed$SURVIVAL, expected_surv_time)
+  # ----------------------------
+  # Define Prediction Function for Median Survival via Calibration
+  # ----------------------------
+  predict_survival_time_gbm <- function(gbm_fit, new_data, train_data) {
+    # Compute GBM risk scores (linear predictors) for the training data
+    train_risk <- predict(gbm_fit, newdata = train_data, n.trees = best_iter, type = "link")
+    
+    # Create a modified training data copy with risk scores stored as "gbm_risk"
+    train_data_mod <- train_data
+    train_data_mod$gbm_risk <- train_risk
+    
+    # Fit a Cox model on the training data using gbm_risk as the sole covariate.
+    cox_model <- coxph(Surv(SURVIVAL, SURVIVAL_FLAG) ~ gbm_risk, data = train_data_mod)
+    base_surv <- survfit(cox_model)
+    
+    # Create an interpolation function for the baseline survival S0(t)
+    base_surv_func <- approxfun(base_surv$time, base_surv$surv, rule = 2)
+    
+    # Compute GBM risk scores for new data
+    new_risk <- predict(gbm_fit, newdata = new_data, n.trees = best_iter, type = "link")
+    
+    # For each new observation, solve for the median survival time t* such that:
+    # S0(t*)^(exp(r)) = 0.5  -->  S0(t*) = 0.5^(1/exp(r))
+    median_times <- sapply(new_risk, function(r) {
+      target <- 0.5^(1/exp(r))
+      lower <- min(base_surv$time)
+      upper <- max(base_surv$time)
+      f <- function(t) { base_surv_func(t) - target }
+      if (f(lower) * f(upper) > 0) {
+        return(NA)
+      } else {
+        return(uniroot(f, lower = lower, upper = upper)$root)
+      }
+    })
+    return(median_times)
+  }
   
-  cat("📈 RMSE:", round(rmse_val, 2), "| MAE:", round(mae_val, 2), "\n\n")
+  # Predict median survival times for the validation set using the current GBM model
+  predicted_median <- predict_survival_time_gbm(gbm_model, validation_data, train_data)
   
-  results_log <- rbind(
-    results_log,
-    data.frame(
-      Nodes = paste(nodes, collapse = "-"),
-      Dropout = dropout,
-      LR = lr,
-      Batch = bs,
-      RMSE = round(rmse_val, 3),
-      MAE = round(mae_val, 3)
-    )
-  )
+  # Compute error metrics (assumes SURVIVAL is stored on log-scale; use exp() to un-log)
+  observed <- exp(validation_data$SURVIVAL)
+  rmse_val <- rmse(observed, predicted_median)
+  mae_val <- mae(observed, predicted_median)
   
+  cat("RMSE:", round(rmse_val, 2), "| MAE:", round(mae_val, 2), "\n\n")
+  
+  # Update best model if current configuration yields lower RMSE (or tie-breaker lower MAE)
   if (rmse_val < best_rmse || (rmse_val == best_rmse && mae_val < best_mae)) {
-    best_model <- model
     best_rmse <- rmse_val
     best_mae <- mae_val
-    best_params <- list(nodes = nodes, dropout = dropout, lr = lr, batch_size = bs)
-    best_expected_surv <- expected_surv_time
+    best_model <- gbm_model
+    best_params <- params
+    best_predicted_median <- predicted_median
   }
 }
 
-# Step 5: Final output
-validation_data_processed$Predicted_Survival_Time <- best_expected_surv
+cat("Best configuration found:\n")
+print(best_params)
+cat("Best RMSE:", round(best_rmse, 2), "| Best MAE:", round(best_mae, 2), "\n")
 
-# Unlog the predicted survival times if they were log-transformed
-# Applying exp() function to reverse log transformation
-predicted_survival_unlogged <- exp(best_expected_surv)
+# ----------------------------
+# Append Predictions to Validation Data
+# ----------------------------
+# Un-log observed survival times (if needed) using exp()
+validation_data$Observed_Survival_Time <- exp(validation_data$SURVIVAL)
+validation_data$Predicted_Survival_Time <- exp(best_predicted_median)  # calibrated median predictions
 
-# Add unlogged predicted survival times to the validation data
-validation_data_processed$Predicted_Survival_Time <- predicted_survival_unlogged
+# ----------------------------
+# Compute Post-hoc Scaling Factor and Adjust Predictions
+# ----------------------------
 
-cat("\n Best DeepSurv configuration:\n")
-cat("  Layers:", paste(best_params$nodes, collapse = "-"), "\n")
-cat("  Dropout:", best_params$dropout, "| LR:", best_params$lr, "| Batch size:", best_params$batch_size, "\n")
-cat("  RMSE:", round(best_rmse, 2), "| MAE:", round(best_mae, 2), "\n")
+# Get observed and predicted survival times.
+observed <- validation_data$Observed_Survival_Time
+predicted <- validation_data$Predicted_Survival_Time
 
-# Show predictions vs actual (after unlogging)
-head(validation_data_processed[, c("SURVIVAL", "Predicted_Survival_Time")])
+c_index_obj <- concordance(Surv(observed) ~ predicted)
+cat("C-index:", round(c_index_obj$concordance, 3), "\n")
 
-# Show all results sorted by RMSE and MAE
-results_log <- results_log[order(results_log$RMSE, results_log$MAE), ]
-print(results_log)
+# Calculate scaling factor alpha:
+calib_factor <- sum(observed * predicted, na.rm = TRUE) / sum(predicted^2, na.rm = TRUE)
+cat("Calibration factor:", calib_factor, "\n")
 
-# ------------------------- Calculate True MAE and RMSE ------------------------
+# Apply scaling transformation to predicted survival times.
+adjusted_predictions <- calib_factor * predicted
 
-# True MAE and RMSE after unlogging
-true_mae <- mae(validation_data_processed$SURVIVAL, validation_data_processed$Predicted_Survival_Time)
-true_rmse <- rmse(validation_data_processed$SURVIVAL, validation_data_processed$Predicted_Survival_Time)
+# Append the adjusted predictions to your validation dataset.
+validation_data$Adjusted_Predicted_Survival_Time <- adjusted_predictions
 
-# Display true MAE and RMSE
-cat("\nTrue MAE (after unlogging):", round(true_mae, 2), "\n")
-cat("True RMSE (after unlogging):", round(true_rmse, 2), "\n")
+# ----------------------------
+# Enhanced Scatter Plot: Observed vs. Adjusted Predicted Survival Times
+# ----------------------------
+scatter_plot_adjusted <- ggplot(validation_data, aes(x = Observed_Survival_Time, y = Adjusted_Predicted_Survival_Time)) +
+  geom_point(alpha = 0.7, color = "blue", size = 2) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed", size = 1) +
+  geom_smooth(method = "loess", se = TRUE, color = "darkgreen") +
+  labs(title = "Observed vs. Adjusted Predicted Survival Times",
+       subtitle = paste("Calibration Factor =", round(calib_factor, 3)),
+       x = "Observed Survival Time",
+       y = "Adjusted Predicted Survival Time") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
+print(scatter_plot_adjusted)
 
-# ------------------------- Calibration Curve ------------------------
-# ------------------------- Calibration with Isotonic Regression ------------------------
-
-library(ggplot2)  # For plotting
-library(pracma)   # For trapz()
-
-# Apply isotonic regression to calibrate predicted survival times
-calibration_model <- stats::approxfun(
-  validation_data_processed$Predicted_Survival_Time, 
-  validation_data_processed$SURVIVAL, 
-  method = "linear", rule = 2
+# ----------------------------
+# Enhanced Density Plot: Compare Distributions
+# ----------------------------
+df_density <- data.frame(
+  Observed = observed,
+  Adjusted = adjusted_predictions
 )
+df_density_long <- melt(df_density, variable.name = "Type", value.name = "Survival_Time")
 
-# Use the isotonic model to adjust the predicted survival times
-calibrated_predictions <- calibration_model(validation_data_processed$Predicted_Survival_Time)
+density_plot_adjusted <- ggplot(df_density_long, aes(x = Survival_Time, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1) +
+  labs(title = "Density Plot of Observed vs. Adjusted Predicted Survival Times",
+       x = "Survival Time",
+       y = "Density",
+       fill = "Type") +
+  scale_fill_manual(values = c("Observed" = "blue", "Adjusted" = "red")) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.position = "bottom")
+print(density_plot_adjusted)
 
-# Add the calibrated predictions to your validation data
-validation_data_processed$Calibrated_Survival_Time <- calibrated_predictions
-
-# Recalculate MAE and RMSE after calibration
-calibrated_rmse <- rmse(validation_data_processed$SURVIVAL, 
-                        validation_data_processed$Calibrated_Survival_Time)
-calibrated_mae <- mae(validation_data_processed$SURVIVAL, 
-                      validation_data_processed$Calibrated_Survival_Time)
-
-cat("\nalibrated MAE:", round(calibrated_mae, 2), "\n")
-cat("Calibrated RMSE:", round(calibrated_rmse, 2), "\n")
-
-# Visualize calibration with a new plot
-calibration_data <- data.frame(
-  predicted = validation_data_processed$Predicted_Survival_Time,
-  calibrated = validation_data_processed$Calibrated_Survival_Time,
-  observed = validation_data_processed$SURVIVAL
-)
-
-# Plot the calibration curve for the calibrated predictions
-calibration_plot <- ggplot(calibration_data, aes(x = predicted, y = calibrated)) +
-  geom_point(alpha = 0.5) + 
-  geom_smooth(method = "loess", se = FALSE, color = "blue") +
-  labs(title = "Calibration Curve (Isotonic Regression)", 
-       x = "Predicted Survival Time", 
-       y = "Calibrated Survival Time") +
-  theme_minimal()
-
-print(calibration_plot)
-
-# Save the DeepSurv model for future use
-saveRDS(best_model, "Models/deepsurv_model.rds")
 ```
 
-```{r histogram of actual and predicted survival times}
+# 2. XGBoost
+
+
+```{r xgboost}
+# ---------------------- XGBoost Survival Time Prediction with Tuning ----------------------
+
+library(xgboost)
+library(dplyr)
+library(Metrics)
 library(survival)
-library(survminer)
 library(ggplot2)
+library(reshape2)
 
-# Create Surv objects for actual and predicted survival
-# Actual survival data
-actual_surv <- Surv(validation_data_processed$SURVIVAL, validation_data_processed$SURVIVAL_FLAG)
+recipe(~ ., data = train_data) %>%
+  step_nzv(all_predictors()) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.9)
 
-# Predicted survival data (you can convert the predicted survival time into event/censoring data)
-# Here we assume a simple cutoff: if the predicted survival time exceeds the actual time, we assume it's censored (1 for event, 0 for censored)
-predicted_surv <- Surv(validation_data_processed$Predicted_Survival_Time, validation_data_processed$SURVIVAL_FLAG)
+# Step 1: Prepare data
+xgb_train <- train_data %>% filter(SURVIVAL_FLAG == 1)
+xgb_valid <- validation_data %>% filter(SURVIVAL_FLAG == 1)
 
-# Fit Kaplan-Meier survival curves for actual and predicted
-actual_km <- survfit(actual_surv ~ 1)
-predicted_km <- survfit(predicted_surv ~ 1)
+# Step 2: Remove categorical variables
+categorical_vars <- names(xgb_train)[sapply(xgb_train, \(col) is.character(col) | is.factor(col))]
+xgb_train <- xgb_train %>% select(-all_of(categorical_vars))
+xgb_valid <- xgb_valid %>% select(-all_of(categorical_vars))
 
-# Plot the Kaplan-Meier curves for both actual and predicted survival times
-ggplot() +
-  geom_step(aes(x = actual_km$time, y = actual_km$surv, color = "Actual"), size = 1.2, linetype = "solid") +
-  geom_step(aes(x = predicted_km$time, y = predicted_km$surv, color = "Predicted"), size = 1.2, linetype = "dashed") +
-  labs(title = "Kaplan-Meier Curves for Actual vs Predicted Survival Time",
-       x = "Survival Time (Days)",
-       y = "Survival Probability") +
-  scale_color_manual(values = c("Actual" = "blue", "Predicted" = "red")) +  # Color for actual and predicted
-  theme_minimal() +
-  theme(legend.title = element_blank(), legend.position = "bottom") +  # Positioning legend
-  scale_x_continuous(breaks = seq(0, max(c(actual_km$time, predicted_km$time)), by = 500))  # Adjust x-axis breaks
+# Step 3: Align columns
+common_cols <- intersect(colnames(xgb_train), colnames(xgb_valid))
+xgb_train <- xgb_train[, common_cols]
+xgb_valid <- xgb_valid[, common_cols]
 
+xgb_train$SURVIVAL <- train_data %>% filter(SURVIVAL_FLAG == 1) %>% pull(SURVIVAL)
+xgb_valid$SURVIVAL <- validation_data %>% filter(SURVIVAL_FLAG == 1) %>% pull(SURVIVAL)
+
+# Step 4: Prepare matrices
+x_train <- as.matrix(xgb_train %>% select(-SURVIVAL))
+y_train <- xgb_train$SURVIVAL
+
+x_valid <- as.matrix(xgb_valid %>% select(-SURVIVAL))
+y_valid <- xgb_valid$SURVIVAL
+
+colnames(x_valid) <- colnames(x_train)
+
+# Step 5: Prepare DMatrix
+dtrain <- xgb.DMatrix(data = x_train, label = y_train)
+dvalid <- xgb.DMatrix(data = x_valid, label = y_valid)
+
+# Step 6: Define hyperparameter grid
+grid <- expand.grid(
+  max_depth = c(3, 6, 9),
+  eta = c(0.01, 0.05, 0.1),
+  nrounds = c(100, 200),
+  subsample = c(0.7, 1),
+  colsample_bytree = c(0.7, 1),
+  min_child_weight = c(1, 5),
+  stringsAsFactors = FALSE
+)
+
+results <- list()
+best_rmse <- Inf
+best_model <- NULL
+best_params <- NULL
+
+# Step 7: Grid search loop
+for (i in 1:nrow(grid)) {
+  cat("🔍 Testing config:", paste(names(grid[i, ]), grid[i, ], collapse = ", "), "\n")
+  
+  params <- list(
+    objective = "reg:squarederror",
+    eval_metric = "rmse",
+    max_depth = grid$max_depth[i],
+    eta = grid$eta[i]
+  )
+  
+  model <- xgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = grid$nrounds[i],
+    early_stopping_rounds = 10,
+    watchlist = list(train = dtrain, eval = dvalid),
+    verbose = 0
+  )
+  
+  preds <- predict(model, dvalid)
+  preds_unlog <- exp(preds)
+  obs_unlog <- exp(y_valid)
+  
+  rmse_val <- rmse(obs_unlog, preds_unlog)
+  mae_val <- mae(obs_unlog, preds_unlog)
+  c_index <- concordance(Surv(obs_unlog) ~ preds_unlog)$concordance
+  
+  results[[i]] <- list(
+    model = model,
+    rmse = rmse_val,
+    mae = mae_val,
+    c_index = c_index,
+    params = grid[i, ]
+  )
+  
+  cat("✅ RMSE:", round(rmse_val, 2), "| MAE:", round(mae_val, 2), "| C-index:", round(c_index, 3), "\n\n")
+  
+  if (rmse_val < best_rmse) {
+    best_rmse <- rmse_val
+    best_model <- model
+    best_params <- grid[i, ]
+    best_preds_unlog <- preds_unlog
+  }
+}
+
+# Step 8: Final results with best model
+xgb_valid$Predicted_Survival_Time <- best_preds_unlog
+xgb_valid$Observed_Survival_Time <- exp(y_valid)
+
+final_mae <- mae(xgb_valid$Observed_Survival_Time, best_preds_unlog)
+final_rmse <- rmse(xgb_valid$Observed_Survival_Time, best_preds_unlog)
+final_c_index <- concordance(Surv(xgb_valid$Observed_Survival_Time) ~ best_preds_unlog)$concordance
+
+cat("\n🎯 Best XGBoost Model:\n")
+print(best_params)
+cat("Final RMSE:", round(final_rmse, 2), "| Final MAE:", round(final_mae, 2), "| Final C-index:", round(final_c_index, 3), "\n")
+
+# Step 9: Scatter plot
+ggplot(xgb_valid, aes(x = Observed_Survival_Time, y = Predicted_Survival_Time)) +
+  geom_point(alpha = 0.5, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Observed vs Predicted Survival Times (Best XGBoost Model)",
+       x = "Observed Survival Time", y = "Predicted Survival Time") +
+  theme_minimal(base_size = 14)
+
+# Step 10: Density plot
+df_long <- melt(xgb_valid[, c("Observed_Survival_Time", "Predicted_Survival_Time")],
+                variable.name = "Type", value.name = "Survival_Time")
+
+ggplot(df_long, aes(x = Survival_Time, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1.2) +
+  scale_fill_manual(values = c("Observed_Survival_Time" = "blue", "Predicted_Survival_Time" = "red")) +
+  labs(title = "Density Plot: Observed vs Predicted Survival Times",
+       x = "Survival Time (Days)", y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.title = element_blank(),
+        legend.position = "bottom")
+
+# ---------------------- 🔧 Manual Calibration by Shrinkage ----------------------
+
+# Define range of shrinkage factors (multiply predicted survival to shrink downward)
+shrink_grid <- seq(0.5, 5, by = 0.01)
+
+calib_results <- data.frame(Shrinkage = shrink_grid, RMSE = NA, MAE = NA, C_Index = NA)
+
+for (i in seq_along(shrink_grid)) {
+  factor <- shrink_grid[i]
+  pred_adj <- xgb_valid$Predicted_Survival_Time * factor
+
+  calib_results$RMSE[i] <- rmse(xgb_valid$Observed_Survival_Time, pred_adj)
+  calib_results$MAE[i] <- mae(xgb_valid$Observed_Survival_Time, pred_adj)
+  calib_results$C_Index[i] <- concordance(Surv(xgb_valid$Observed_Survival_Time) ~ pred_adj)$concordance
+}
+
+# Get best shrinkage factor by RMSE
+best_row <- calib_results[which.min(calib_results$RMSE), ]
+best_shrink <- best_row$Shrinkage
+
+cat("\n🎯 Best Shrinkage Calibration:\n")
+print(best_row)
+
+# Apply the best factor
+xgb_valid$Predicted_Survival_Time_Calibrated <- xgb_valid$Predicted_Survival_Time * best_shrink
+
+# ---------------------- 🔍 Evaluate & Visualize ----------------------
+
+# Final metrics
+rmse_cal <- rmse(xgb_valid$Observed_Survival_Time, xgb_valid$Predicted_Survival_Time_Calibrated)
+mae_cal <- mae(xgb_valid$Observed_Survival_Time, xgb_valid$Predicted_Survival_Time_Calibrated)
+cindex_cal <- concordance(Surv(xgb_valid$Observed_Survival_Time) ~ xgb_valid$Predicted_Survival_Time_Calibrated)$concordance
+
+cat("\n📊 Calibrated Results (Shrinkage ×", best_shrink, "):\n")
+cat("RMSE:", round(rmse_cal, 2), "| MAE:", round(mae_cal, 2), "| C-index:", round(cindex_cal, 3), "\n")
+
+# Plot: Observed vs Calibrated
+library(ggplot2)
+ggplot(xgb_valid, aes(x = Observed_Survival_Time, y = Predicted_Survival_Time_Calibrated)) +
+  geom_point(alpha = 0.5, color = "darkorange") +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+  labs(title = paste0("Shrinkage-Calibrated Predictions (×", best_shrink, ")"),
+       x = "Observed Survival Time", y = "Calibrated Predicted Survival Time") +
+  theme_minimal(base_size = 14)
+
+# Plot: Density comparison
+library(reshape2)
+df_long_calib <- melt(xgb_valid[, c("Observed_Survival_Time", "Predicted_Survival_Time_Calibrated")],
+                      variable.name = "Type", value.name = "Survival_Time")
+
+ggplot(df_long_calib, aes(x = Survival_Time, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1.2) +
+  scale_fill_manual(values = c("Observed_Survival_Time" = "blue",
+                                "Predicted_Survival_Time_Calibrated" = "darkorange")) +
+  labs(title = "Density Plot: Observed vs Shrinkage-Calibrated Predictions",
+       x = "Survival Time", y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.title = element_blank(),
+        legend.position = "bottom")
+
+```
+
+# 2.1. SHAP
+
+```{r split data}
+# Split the data into training (60%), validation (20%), and testing (20%)
+train_val_index <- createDataPartition(survival$SURVIVAL_FLAG, p = 0.8, list = FALSE)
+train_val_data <- survival[train_val_index, ]
+test_data <- survival[-train_val_index, ]
+
+train_index <- createDataPartition(train_val_data$SURVIVAL_FLAG, p = 0.75, list = FALSE)
+train_data <- train_val_data[train_index, ]
+validation_data <- train_val_data[-train_index, ] 
+
+```
+
+```{r variables selection}
+# ---------------------- 📌 SHAP Feature Selection ----------------------
+
+library(SHAPforxgboost)
+
+# Step 1: Get SHAP values from the best XGBoost model
+shap_result <- shap.values(xgb_model = best_model, X_train = x_train)
+
+# Step 2: Extract SHAP importance
+shap_importance <- shap_result$mean_shap_score
+shap_ranking <- sort(shap_importance, decreasing = TRUE)
+
+# Step 3: Keep top N variables (e.g., top 50)
+top_n <- 30
+top_features <- names(shap_ranking)[1:min(top_n, length(shap_ranking))]
+
+cat("✅ Top features selected by SHAP:\n")
+print(top_features)
+
+```
+
+```{r XGBoost SHAP}
+# Step 4: Subset train and valid sets to top SHAP features
+x_train_shap <- as.matrix(xgb_train[, top_features])
+x_valid_shap <- as.matrix(xgb_valid[, top_features])
+
+dtrain_shap <- xgb.DMatrix(data = x_train_shap, label = y_train)
+dvalid_shap <- xgb.DMatrix(data = x_valid_shap, label = y_valid)
+
+# Step 5: Retrain using best params (optional: tune again)
+# ---------------------- 🔁 Tuning with SHAP-Selected Features ----------------------
+
+# Define a smaller/focused grid for faster tuning (adjust as needed)
+grid_shap <- expand.grid(
+  max_depth = c(3, 5, 7),
+  eta = c(0.01, 0.05, 0.1),
+  nrounds = c(100, 200),
+  min_child_weight = c(1, 5),
+  subsample = c(0.7, 1),
+  colsample_bytree = c(0.7, 1),
+  stringsAsFactors = FALSE
+)
+
+results_shap <- list()
+best_rmse_shap <- Inf
+best_model_shap <- NULL
+best_params_shap <- NULL
+
+for (i in 1:nrow(grid_shap)) {
+  cat("🔍 SHAP Tuning Config:", paste(names(grid_shap[i, ]), grid_shap[i, ], collapse = ", "), "\n")
+  
+  params <- list(
+    objective = "reg:squarederror",
+    eval_metric = "rmse",
+    max_depth = grid_shap$max_depth[i],
+    eta = grid_shap$eta[i],
+    min_child_weight = grid_shap$min_child_weight[i],
+    subsample = grid_shap$subsample[i],
+    colsample_bytree = grid_shap$colsample_bytree[i]
+  )
+  
+  model <- xgb.train(
+    params = params,
+    data = dtrain_shap,
+    nrounds = grid_shap$nrounds[i],
+    watchlist = list(train = dtrain_shap, eval = dvalid_shap),
+    early_stopping_rounds = 10,
+    verbose = 0
+  )
+  
+  preds <- predict(model, dvalid_shap)
+  preds_unlog <- exp(preds)
+  obs_unlog <- exp(y_valid)
+
+  rmse_val <- rmse(obs_unlog, preds_unlog)
+  mae_val <- mae(obs_unlog, preds_unlog)
+  c_index <- concordance(Surv(obs_unlog) ~ preds_unlog)$concordance
+  
+  results_shap[[i]] <- list(
+    model = model,
+    rmse = rmse_val,
+    mae = mae_val,
+    c_index = c_index,
+    params = grid_shap[i, ]
+  )
+  
+  cat("✅ RMSE:", round(rmse_val, 2), "| MAE:", round(mae_val, 2), "| C-index:", round(c_index, 3), "\n\n")
+  
+  if (rmse_val < best_rmse_shap) {
+    best_rmse_shap <- rmse_val
+    best_model_shap <- model
+    best_params_shap <- grid_shap[i, ]
+    best_preds_unlog_shap <- preds_unlog
+  }
+}
+
+
+# Step 6: Predict and evaluate
+preds_shap <- predict(best_model_shap, newdata = dvalid_shap)
+preds_shap_unlog <- exp(preds_shap)
+
+rmse_shap <- rmse(exp(y_valid), preds_shap_unlog)
+mae_shap <- mae(exp(y_valid), preds_shap_unlog)
+cindex_shap <- concordance(Surv(exp(y_valid)) ~ preds_shap_unlog)$concordance
+
+cat("\n📊 SHAP-Based Feature Selection Model:\n")
+cat("RMSE:", round(rmse_shap, 2), "| MAE:", round(mae_shap, 2), "| C-index:", round(cindex_shap, 3), "\n")
+
+# ---------------------- 📈 Plot: SHAP-Tuned Model Predictions ----------------------
+
+# Store predicted and observed survival times
+xgb_valid$Observed_Survival_Time <- exp(y_valid)
+xgb_valid$Predicted_Survival_Time <- best_preds_unlog_shap
+
+# Scatter Plot
+ggplot(xgb_valid, aes(x = Observed_Survival_Time, y = Predicted_Survival_Time)) +
+  geom_point(alpha = 0.5, color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  labs(title = "Observed vs Predicted Survival Times (SHAP-Tuned XGBoost)",
+       x = "Observed Survival Time", y = "Predicted Survival Time") +
+  theme_minimal(base_size = 14)
+
+# Density Plot
+df_long_shap <- melt(xgb_valid[, c("Observed_Survival_Time", "Predicted_Survival_Time")],
+                     variable.name = "Type", value.name = "Survival_Time")
+
+ggplot(df_long_shap, aes(x = Survival_Time, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1.2) +
+  scale_fill_manual(values = c("Observed_Survival_Time" = "blue", "Predicted_Survival_Time" = "red")) +
+  labs(title = "Density Plot: Observed vs Predicted (SHAP-Tuned)",
+       x = "Survival Time", y = "Density") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.title = element_blank(),
+        legend.position = "bottom")
+
+# Save model as json
+
+xgb.save(best_model_shap, "Models/xgboost_shap_model_Survival_Length.json")
 ```
 
 # 3. Random Forest over Survival
-
-```{r read data}
+```{r read data }
 df <- read.csv("../data/prepared_to_prediction/Survival.csv", stringsAsFactors = TRUE)
 
 # Ensure SURVIVAL_FLAG is a factor for classification
 df <- df %>%
   mutate(SURVIVAL_FLAG = as.factor(SURVIVAL_FLAG)) %>%
-  select(-SUBJECT_ID_COMPOSE)
+  select(-SUBJECT_ID_COMPOSE) %>%
+  filter(SURVIVAL < 50)
 ```
 
-```{r outloers check}
+```{r outloers check RF}
 ggplot(df, aes(y = SURVIVAL)) +
   geom_boxplot(fill = "lightblue", outlier.color = "red") +
   theme_minimal() +
   labs(title = "Boxplot of SURVIVAL Variable", y = "Survival Time (days)")
 
-df$SURVIVAL <- log(df$SURVIVAL + 1)
-
-ggplot(df, aes(y = SURVIVAL)) +
-  geom_boxplot(fill = "lightblue", outlier.color = "red") +
-  theme_minimal() +
-  labs(title = "Boxplot of SURVIVAL Variable", y = "Survival Time (days)")
-
-# Log transform all numeric vars
-df <- df %>%
-  mutate(across(
-    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, DRUGS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
-    ~ (log(. + 1))))
 ```
 
-```{r balance data}
-# Convert the outcome variable to a factor if it isn't already
-df$SURVIVAL_FLAG <- as.factor(df$SURVIVAL_FLAG)
-balanced_data <- downSample(x = df[, setdiff(names(df), "SURVIVAL_FLAG")],
-                          y = df$SURVIVAL_FLAG,
-                          yname = "SURVIVAL_FLAG")
 
-# Check the new class distribution
-cat("New class distribution:\n")
-print(table(balanced_data$SURVIVAL_FLAG))
-```
-
-```{r log transformation and scaling}
+```{r log transformation and scaling RF}
 # Log-transform and scale the data
-survival <- balanced_data %>%
+survival <- df %>%
   mutate(across(
-    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, DRUGS_NUM, ARTERIAL_LINE, MULTI_LUMEN, INVASIVE_VENTILATION, DIALYSIS_CRRT, starts_with(c("BG_", "H", "CH"))), 
+    c(AGE_AT_ADMISSION, DIAGNOSES_NUM, starts_with(c("BG_", "H", "CH"))), 
     ~ (log(. + 1))
   ))
 
 ```
 
-```{r missing values}
+```{r missing values RF}
 survival <- survival %>%
   mutate(across(
     where(is.numeric), 
@@ -427,7 +989,7 @@ survival <- survival %>%
                 ~ ifelse(is.infinite(.), mean(.[!is.infinite(.)], na.rm = TRUE), .)))
 ```
 
-```{r split data}
+```{r split data RF}
 # Split the data into training (60%), validation (20%), and testing (20%)
 train_val_index <- createDataPartition(survival$SURVIVAL_FLAG, p = 0.8, list = FALSE)
 train_val_data <- survival[train_val_index, ]
@@ -507,62 +1069,79 @@ test_data_reduced <- test_data[, c("SURVIVAL", "SURVIVAL_FLAG", important_vars)]
 Random Forest over Survival
 
 ```{r RFS Best Model by RMSE/MAE}
-# Load necessary libraries
+# ----------------------------
+# Libraries
+# ----------------------------
 library(randomForestSRC)
 library(survival)
 library(pracma)
 library(Metrics)
+library(ggplot2)
 
-# Ensure numeric encoding
-train_data_reduced$SURVIVAL_FLAG <- as.numeric(as.character(train_data_reduced$SURVIVAL_FLAG))
-validation_data_reduced$SURVIVAL_FLAG <- as.numeric(as.character(validation_data_reduced$SURVIVAL_FLAG))
-
-# Define a grid of hyperparameters
+# ----------------------------
+# Define a Grid of Hyperparameters
+# ----------------------------
 tune_grid <- expand.grid(
-  mtry = c(5, 10, 15, 20),
-  ntree = c(100, 300, 500),
-  nodesize = c(1, 3, 5, 10)
+  mtry = c(15),
+  ntree = c(700),
+  nodesize = c(10)
 )
 
-# Track the best model by lowest RMSE (and MAE as tie-breaker)
 best_model <- NULL
 best_rmse <- Inf
 best_mae <- Inf
 best_params <- NULL
 best_expected_surv <- NULL
 
-# Grid search over hyperparameters
+# ----------------------------
+# Grid Search over Hyperparameters (only patients who died)
+# ----------------------------
 for (i in 1:nrow(tune_grid)) {
   params <- tune_grid[i, ]
   cat("Testing configuration: mtry =", params$mtry,
       ", ntree =", params$ntree,
       ", nodesize =", params$nodesize, "\n")
   
-  # Train model
+  # Train RSF on the died subset
   model <- rfsrc(
     Surv(SURVIVAL, SURVIVAL_FLAG) ~ ., 
-    data = train_data_reduced, 
+    data = train_data, 
     ntree = params$ntree,
     mtry = params$mtry,
     nodesize = params$nodesize,
     importance = TRUE
   )
   
-  # Predict survival function
-  pred <- predict(model, newdata = validation_data_reduced)
+  # Predict on the died subset of validation data
+  pred <- predict(model, newdata = validation_data)
   surv_probs <- pred$survival
   time_grid <- pred$time.interest
   
-  # Compute expected survival time
-  expected_surv_time <- apply(surv_probs, 1, function(prob) trapz(time_grid, prob))
+  # OPTIONAL diagnostic plot for first observation
+  if (i == 1) {
+    plot(time_grid, surv_probs[1, ], type = "l",
+         main = "Survival Curve (Died) - 1st Obs",
+         xlab = "Time", ylab = "Survival Probability")
+    abline(h = 0.05, col = "red", lty = 2)
+  }
   
-  # Calculate RMSE and MAE
-  rmse_val <- rmse(validation_data_reduced$SURVIVAL, expected_surv_time)
-  mae_val <- mae(validation_data_reduced$SURVIVAL, expected_surv_time)
+  # RMST up to tau (95th percentile of time grid)
+  tau <- quantile(time_grid, probs = 0.95)
+  cat("Using tau =", round(tau, 2), "\n")
+  
+  expected_surv_time <- apply(surv_probs, 1, function(prob) {
+    valid_idx <- time_grid <= tau
+    dt <- diff(c(0, time_grid[valid_idx]))
+    sum(prob[valid_idx] * dt)
+  })
+  
+  # Compare predicted vs. actual SURVIVAL times only among those who died
+  rmse_val <- rmse(validation_data$SURVIVAL, expected_surv_time)
+  mae_val <- mae(validation_data$SURVIVAL, expected_surv_time)
   
   cat("RMSE:", round(rmse_val, 2), "| MAE:", round(mae_val, 2), "\n\n")
   
-  # Select model with lowest RMSE (break ties using MAE)
+  # Track best config
   if (rmse_val < best_rmse || (rmse_val == best_rmse && mae_val < best_mae)) {
     best_rmse <- rmse_val
     best_mae <- mae_val
@@ -572,20 +1151,102 @@ for (i in 1:nrow(tune_grid)) {
   }
 }
 
-# Final results
-validation_data_reduced$Predicted_Survival_Time <- best_expected_surv
-
-cat("Best configuration: mtry =", best_params$mtry,
-    ", ntree =", best_params$ntree,
-    ", nodesize =", best_params$nodesize, "\n")
+cat("Best config for died subset:\n")
+print(best_params)
 cat("Best RMSE:", round(best_rmse, 2), "| Best MAE:", round(best_mae, 2), "\n")
 
-# Compare actual vs predicted survival
-head(validation_data_reduced[, c("SURVIVAL", "Predicted_Survival_Time")])
+# ----------------------------
+# If you want to calibrate with a Cox model, do so on the died subset
+# ----------------------------
+cat("Starting calibration step...\n")
 
+train_pred <- predict(best_model, newdata = train_data)
+train_risk <- rowSums(train_pred$chf)
+train_data$rf_risk <- train_risk
+
+# Because everyone died, Surv(SURVIVAL, 1)
+cox_calib <- coxph(Surv(SURVIVAL, rep(1, nrow(train_data))) ~ rf_risk, data = train_data)
+base_surv <- survfit(cox_calib)
+base_surv_func <- approxfun(base_surv$time, base_surv$surv, rule = 2)
+
+val_pred <- predict(best_model, newdata = validation_data)
+val_risk <- rowSums(val_pred$chf)
+
+calibrated_median <- sapply(val_risk, function(r) {
+  new_sf <- survfit(cox_calib, newdata = data.frame(rf_risk = r))
+  med <- tryCatch({
+    quantile(new_sf, probs = 0.5)$quantile
+  }, error = function(e) {
+    NA
+  })
+  return(med)
+})
+
+# Store predictions in the died subset
+validation_data$Predicted_Survival_Time <- best_expected_surv
+validation_data$Calibrated_Predicted_Survival_Time <- calibrated_median
+
+# ⚠️ C-index calculation (no censoring, all patients died)
+# Compare predicted survival time to actual survival time
+c_index_obj <- concordance(Surv(validation_data$SURVIVAL) ~ validation_data$Predicted_Survival_Time)
+c_index_calib_obj <- concordance(Surv(validation_data$SURVIVAL) ~ validation_data$Calibrated_Predicted_Survival_Time)
+
+# Output results
+cat("Best config for died subset: mtry =", best_params$mtry,
+    ", ntree =", best_params$ntree,
+    ", nodesize =", best_params$nodesize, "\n")
+cat("RMSE (Died Subset):", round(best_rmse, 2), "| MAE:", round(best_mae, 2), "\n")
+cat("C-index (raw predictions):", round(c_index_obj$concordance, 3), "\n")
+cat("C-index (calibrated predictions):", round(c_index_calib_obj$concordance, 3), "\n")
+
+# E.g., plot or compute metrics specifically on this died subset
+ggplot(validation_data, aes(x = SURVIVAL, y = Calibrated_Predicted_Survival_Time)) +
+  geom_point(alpha = 0.6, color = "blue", size = 2) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Observed vs. Calibrated Predicted Survival Times (Died Subset)",
+       x = "Observed Survival Time (Died Only)",
+       y = "Calibrated Median Survival Time") +
+  theme_minimal(base_size = 14)
 
 ```
 
-Testing configuration: 15, 300, 5 
-Concordance Index for current configuration: 0.8575315 
+```{r plots}
+library(reshape2)
+library(ggplot2)
+
+# Also ensure that Observed_Survival_Time, Predicted_Survival_Time, and Calibrated_Predicted_Survival_Time
+# have been appended to validation_data_died (from your RSF modeling & calibration code)
+# For example:
+# validation_data_died$Observed_Survival_Time <- exp(validation_data_died$SURVIVAL)
+# validation_data_died$Predicted_Survival_Time <- best_expected_surv  # or your RSF-derived predictions
+# validation_data_died$Calibrated_Predicted_Survival_Time <- exp(calibrated_median)  # after calibration
+
+# Create a data frame containing the three measures:
+df_density <- data.frame(
+  Observed = validation_data_died$SURVIVAL,
+  RSF_Predicted = validation_data_died$Predicted_Survival_Time,
+  Calibrated_Predicted = validation_data_died$Calibrated_Predicted_Survival_Time
+)
+
+# Reshape the data to long format for ggplot2
+df_density_long <- melt(df_density, variable.name = "Type", value.name = "Survival_Time")
+
+# Create the density plot
+density_plot <- ggplot(df_density_long, aes(x = Survival_Time, fill = Type)) +
+  geom_density(alpha = 0.4, adjust = 1) +
+  labs(title = "Density Plot: Observed vs. RSF and Calibrated Predictions (Died Only)",
+       x = "Survival Time",
+       y = "Density",
+       fill = "Prediction Type") +
+  scale_fill_manual(values = c("Observed" = "blue", 
+                               "RSF_Predicted" = "red",
+                               "Calibrated_Predicted" = "green")) +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        legend.position = "bottom")
+
+print(density_plot)
+
+
+```
 

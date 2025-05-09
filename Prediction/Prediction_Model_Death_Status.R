@@ -52,7 +52,7 @@ train_means <- c(
   H_LAST_PT = 15.57762
 )
 
-
+ 
 # Define the prediction function that handles NA/infinite imputation and applies a logged transformation with offset.
 x <- function(
     AGE_AT_ADMISSION, ICD9_51881, PRESCRIPTIONS_NUM, BG_LAST_LACTATE, H_LAST_RDW, H_LAST_LYMPHOCYTES,
@@ -113,12 +113,23 @@ x <- function(
     }
   }
   
-  # --- Apply logarithmic transformation with an offset to avoid log(0) ---
-  offset <- 1e-8  # small constant to ensure positivity
-  input_data_logged <- as.data.frame(lapply(input_data, function(x) log(x + offset)))
+  no_log_vars <- c("ICD9_431", "ICD9_41401", "ICD9_0389", "ICD9_51881")
+  
+  # Step 4: Create a copy of input_data to apply the transformation.
+  input_data_transformed <- input_data
+  
+  # For each column, apply the log transformation only if the column is NOT in no_log_vars.
+  for (col in names(input_data)) {
+    if (!(col %in% no_log_vars)) {
+      # Use log(x + 1) to avoid log(0); adjust the offset if needed.
+      input_data_transformed[[col]] <- log(input_data[[col]] + 1)
+    } 
+    # Else, leave the column value unchanged.
+  }
+
   
   # Convert the logged data to an xgb.DMatrix, indicating that NA is missing.
-  dmatrix <- xgb.DMatrix(data = as.matrix(input_data_logged), missing = NA)
+  dmatrix <- xgb.DMatrix(data = as.matrix(input_data_transformed), missing = NA)
   
   # Load the model
   model <- load_model()
@@ -139,3 +150,4 @@ x <- function(
                   ". The patient is under", risk_category, "!")
   return(result)
 }
+

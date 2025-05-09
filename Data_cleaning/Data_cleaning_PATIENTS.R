@@ -106,5 +106,3 @@ patients_clean <- patients_clean %>%
 
 # Write cleaned patients data to csv
 write.csv(patients_clean, "data/raw/cleaned/PATIENTS_clean.csv", row.names = FALSE)
-
-
